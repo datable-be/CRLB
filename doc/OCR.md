@@ -136,4 +136,216 @@ lines_fts  (FTS5: line text + page_id/line reference)  -- for search
 - **OCR quality is fixed:** the text is what ABBYY recognised in 2013–2015, errors included. Re-OCR with a modern engine is only worth it if the error rate turns out to be high.
 - **Coordinates are tied to these exact PDFs:** if a file is re-processed (as happened with the repaired versions of `09` and `19_1`), coordinates may shift and extraction must be redone.
 
-See also [NER_plan.md](NER_plan.md) for named entity recognition on top of this text database.
+See also [NER.md](NER.md) for named entity recognition on top of this text database.
+
+## OCR quality test
+
+A test of the quality of the existing OCR text layer on hand-corrected specimen pages, how to interpret the results, and whether re-running the OCR is advisable.
+
+### Summary
+
+- Overall character error rate (CER) is **5.4%**, but **59% of all errors are superfluous spaces** (e.g. `M useum`, `p r o v e n a n c e`).
+- Without those spaces, quality is fairly even across volumes: roughly **1–2.5% CER**.
+- The OCR batch (2013 vs 2014) makes no visible difference; the typography of each volume does.
+- The superfluous spaces are encoded in ABBYY's text layer itself; they are not an artefact of text extraction.
+- Advice: do not re-run the OCR yet. First repair the existing OCR (spaces, `I` → `1`), then compare a few engines on the corrected specimen pages.
+
+### Method
+
+#### Specimens
+
+Two catalogue pages and two index pages per volume, drawn at random (seed 42) from pages with at least 50 words, with `scripts/sample_specimens.py` (`make sample_specimens`):
+
+| Volume | Catalogue                        | Index                    |
+| ------ | -------------------------------- | ------------------------ |
+| 02     | `02_1_links` p. 313, 380         | `02_index` p. 18, 28     |
+| 19_2   | `19_2_links` p. 77, 195          | `19_2_index` p. 10, 20   |
+| 26_2_I | `26_2_I_1_querylink` p. 393, 425 | `26_2_I_Index` p. 28, 43 |
+
+Catalogue pages are taken from the bookmark whose title contains "catalog" up to the next bookmark at the same or a higher level; index files are sampled in full. Each specimen gets `page.png`, `ocr.txt` and `gt.txt` (a copy of the OCR text, corrected by hand against the page image). All output stays local in `doc/CRLB_pdfs/specimens` (gitignored).
+
+#### Analysis
+
+`scripts/analyse_specimens.py` (`make analyse_specimens`) compares `gt.txt` with `ocr.txt` for every corrected specimen:
+
+- Both texts are normalised: soft hyphens at line ends are joined, whitespace and line breaks are collapsed; case and punctuation are kept.
+- **CER**: character edit distance / ground-truth characters, split into substitutions, insertions and deletions.
+- **CER loose**: the same without case and punctuation.
+- **WER**: word edit distance / ground-truth words.
+- Errors are pooled before computing rates per group (file, OCR year, section).
+- The most common confusions (adjacent edits merged) are written to `confusions.csv`.
+
+### Results
+
+#### Per specimen
+
+| Specimen           | Year | Section   | GT chars | Char errors | Subst. | Ins. | Del. | CER   | CER loose | WER   |
+| ------------------ | ---- | --------- | -------- | ----------- | ------ | ---- | ---- | ----- | --------- | ----- |
+| 02_1_links p. 313  | 2013 | catalogue | 2739     | 61          | 38     | 19   | 4    | 2.2%  | 1.3%      | 10.5% |
+| 02_1_links p. 380  | 2013 | catalogue | 2669     | 59          | 40     | 11   | 8    | 2.2%  | 1.6%      | 8.2%  |
+| 19_2_links p. 77   | 2013 | catalogue | 3410     | 188         | 45     | 100  | 43   | 5.5%  | 3.7%      | 33.9% |
+| 19_2_links p. 195  | 2013 | catalogue | 3635     | 244         | 63     | 158  | 23   | 6.7%  | 5.5%      | 42.3% |
+| 26_2_I_1 p. 393    | 2014 | catalogue | 4407     | 440         | 34     | 389  | 17   | 10.0% | 9.3%      | 91.6% |
+| 26_2_I_1 p. 425    | 2014 | catalogue | 4238     | 228         | 36     | 176  | 16   | 5.4%  | 4.8%      | 42.6% |
+| 02_index p. 18     | 2013 | index     | 1478     | 19          | 11     | 2    | 6    | 1.3%  | 0.8%      | 7.5%  |
+| 02_index p. 28     | 2013 | index     | 2333     | 33          | 18     | 2    | 13   | 1.4%  | 0.7%      | 6.8%  |
+| 19_2_index p. 10   | 2013 | index     | 3375     | 333         | 32     | 294  | 7    | 9.9%  | 10.5%     | 97.2% |
+| 19_2_index p. 20   | 2013 | index     | 2636     | 223         | 15     | 195  | 13   | 8.5%  | 8.9%      | 75.7% |
+| 26_2_I_Index p. 28 | 2014 | index     | 3240     | 86          | 69     | 14   | 3    | 2.7%  | 2.8%      | 18.7% |
+| 26_2_I_Index p. 43 | 2014 | index     | 3193     | 95          | 74     | 14   | 7    | 3.0%  | 3.2%      | 21.3% |
+
+#### Per group
+
+| Group              | Specimens | CER  | CER loose | WER   |
+| ------------------ | --------- | ---- | --------- | ----- |
+| **All**            | 12        | 5.4% | 4.9%      | 42.4% |
+| 02_1_links         | 2         | 2.2% | 1.5%      | 9.4%  |
+| 02_index           | 2         | 1.4% | 0.8%      | 7.1%  |
+| 19_2_index         | 2         | 9.2% | 9.8%      | 87.2% |
+| 19_2_links         | 2         | 6.1% | 4.6%      | 38.2% |
+| 26_2_I_1_querylink | 2         | 7.7% | 7.1%      | 67.2% |
+| 26_2_I_Index       | 2         | 2.8% | 3.0%      | 20.0% |
+| OCR year 2013      | 8         | 5.2% | 4.5%      | 38.0% |
+| OCR year 2014      | 4         | 5.6% | 5.4%      | 49.3% |
+| Catalogue          | 6         | 5.8% | 4.8%      | 42.5% |
+| Index              | 6         | 4.9% | 5.0%      | 42.3% |
+
+With only two pages per file, per-file figures are indicative.
+
+#### Most common confusions
+
+| Ground truth → OCR                                          | Count   | Interpretation                                         |
+| ----------------------------------------------------------- | ------- | ------------------------------------------------------ |
+| `` → ` `                                                    | 1192    | Superfluous space                                      |
+| `I` → `1`                                                   | 128     | Capital I / Roman numeral read as digit                |
+| `- ` → ``                                                   | 57      | Transcription convention, not an OCR error (see below) |
+| `o` → `0`                                                   | 19      | Classic confusion                                      |
+| `s` → `S`                                                   | 17      | Old typography (ligature)                              |
+| `s` → `f`                                                   | 15      | Long s / ligature                                      |
+| `ct` → `d`                                                  | 7       | `ct` ligature                                          |
+| `l` → `i`                                                   | 5       | Classic confusion                                      |
+| `rn` → `m`                                                  | 3       | Classic confusion                                      |
+| `PROVENANCE` → `p r o v e n a n c e `                       | 3       | Letter-spaced small caps heading                       |
+| `EXHIBITED`, `LITERATURE`, `COPY` → letter-spaced lowercase | several | Same                                                   |
+
+### Interpretation
+
+#### 1. Superfluous spaces dominate
+
+- 1,192 of 2,009 character errors (59%) are inserted spaces.
+- They are concentrated on the four worst pages: `26_2_I_1` p. 393, both `19_2_index` pages and the `19_2_links` pages. The other files have very few.
+- **They come from ABBYY, not from text extraction.** The spaces are actual characters in the PDF text layer: on `26_2_I_1` p. 393 there are 1,100 space characters for 727 real words. Of three extractors compared (PyMuPDF, pdftotext, pypdf), PyMuPDF adds the fewest spaces:
+
+| Specimen           | GT words | PyMuPDF | pdftotext | pypdf | Space chars in text layer |
+| ------------------ | -------- | ------- | --------- | ----- | ------------------------- |
+| 02_1_links p. 313  | 467      | 485     | 531       | 505   | 475                       |
+| 02_1_links p. 380  | 463      | 474     | 502       | 494   | 469                       |
+| 19_2_links p. 77   | 560      | 659     | 745       | 790   | 621                       |
+| 19_2_links p. 195  | 597      | 750     | 986       | 962   | 714                       |
+| 26_2_I_1 p. 393    | 727      | 1123    | 2491      | 2108  | 1100                      |
+| 26_2_I_1 p. 425    | 720      | 896     | 1593      | 1298  | 872                       |
+| 02_index p. 18     | 226      | 229     | 230       | 232   | 215                       |
+| 02_index p. 28     | 382      | 381     | 386       | 386   | 361                       |
+| 19_2_index p. 10   | 493      | 781     | 1925      | 1474  | 751                       |
+| 19_2_index p. 20   | 423      | 616     | 1198      | 924   | 580                       |
+| 26_2_I_Index p. 28 | 454      | 468     | 477       | 462   | 441                       |
+| 26_2_I_Index p. 43 | 432      | 445     | 442       | 505   | 421                       |
+
+- **Letter-spaced headings** are the clearest case: in 26_2, `PROVENANCE` becomes `p r o v e n a n c e`, and likewise `EXHIBITED`, `LITERATURE` and `COPY`. ABBYY reads each letter as a separate word and also lowercases the small caps.
+
+#### 2. Without the spaces, quality is fairly even
+
+Rough estimate (character errors minus insertions, which are mostly spaces):
+
+| File                         | CER  | CER without inserted spaces (approx.) |
+| ---------------------------- | ---- | ------------------------------------- |
+| 02_1 (catalogue, 2013)       | 2.2% | ~1.7%                                 |
+| 02_index (2013)              | 1.4% | ~1.3%                                 |
+| 19_2_links (catalogue, 2013) | 6.1% | ~2.5%                                 |
+| 19_2_index (2013)            | 9.2% | ~1.1%                                 |
+| 26_2_I_1 (catalogue, 2014)   | 7.7% | ~1.2%                                 |
+| 26_2_I_Index (2014)          | 2.8% | ~2.4%                                 |
+
+The OCR batch (2013 vs 2014) makes no visible difference. What matters is the typography of each volume: letter spacing, small caps, ligatures.
+
+#### 3. WER is misleading here
+
+Overall WER is 42% against a CER of 5.4%. One superfluous space turns one correct word into two wrong ones, so WER heavily exaggerates the problem.
+
+#### 4. Other systematic errors
+
+- **`I` → `1` (128×):** most likely Roman numerals or capital I in references. Systematic, so fixable with context rules.
+- **`- ` → ``(57×, plus 5× `-` →``):** not an OCR error. The OCR has a soft hyphen at the line break, which the analysis removes; `gt.txt` has a normal hyphen there, which stays. Agreeing on one convention, or having the analysis also join hyphens at line ends, removes these errors.
+- **Old typography (2013 volumes):** `s` → `S`, `s` → `f`, `ct` → `d`, `st` → `U` are ligature and long-s problems. Small in number.
+- **Classic confusions:** `o` → `0`, `l` → `i`, `rn` → `m`.
+
+#### Consequences for the planned work
+
+- **Search:** superfluous spaces break phrase search; "Museum" will not find `M useum`.
+- **Coordinates and highlighting:** not affected, apart from one word being split over two boxes.
+- **NER** (see [NER.md](NER.md)): the catalogue headings (_Provenance_, _Literature_, …) used to split entries are exactly the ones that come out letter-spaced. Rule-based segmentation must handle that, or the spacing must be repaired first.
+- **Repairing the spacing** looks promising because it is so systematic: join runs of single letters (`p r o v e n a n c e`), and join two fragments when together they form a known word (`M useum`). Such a repair can be measured against the corrected specimens.
+
+### Should the OCR be re-run?
+
+Not yet. First try repairing the existing OCR, and let a small comparison on the corrected specimen pages decide whether new OCR is worth it.
+
+#### Why not re-run straight away
+
+- **Character recognition is already fairly good.** Without superfluous spaces the error rate is roughly 1–2.5%. A modern engine might get below 1%, but the gain is modest.
+- **The spaces are systematic** (letter spacing, small caps), so a repair step may remove much of the problem cheaply, and its effect can be measured exactly.
+- **The input for new OCR is limited.** Re-OCR would use the images inside the PDFs. In `02_1` those are already reduced to black and white (1-bit JBIG2); in the MRC files the background is only 150 dpi. Any engine does worse on that than on the original scans.
+
+#### Options
+
+Requirements: **word coordinates** (validation tool, highlighting) and preferably **local processing**.
+
+| Option                                     | Strengths                                                                                              | Weaknesses                                                                                                                                             |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **ABBYY (current version)**                | Strong on printed text and layout; exports word coordinates (XML/ALTO)                                 | Commercial; probably no large gain over FR11 on these images                                                                                           |
+| **Tesseract 5**                            | Free, local, hOCR/ALTO with word boxes                                                                 | Weaker on small caps, letter spacing and mixed layouts; needs preprocessing                                                                            |
+| **Transkribus**                            | Good layout analysis, printed-text models, trainable on own corrected pages, PAGE XML with coordinates | Cloud service (data leaves the machine), paid credits; main strength is handwriting                                                                    |
+| **Kraken / eScriptorium**                  | Open source, trainable, local, with coordinates                                                        | More setup work                                                                                                                                        |
+| **Vision-language models** (LLM-based OCR) | Read very well in context; would correctly produce "Provenance"                                        | Coordinates weak or missing; risk of silently "improving" text, which is dangerous for scholarly validation; cloud unless an open model is run locally |
+
+### Repairing the existing OCR
+
+Repairs are done with a **deterministic script, not an LLM**, to avoid introducing hallucinations, which would be worse than plain OCR errors.
+
+#### Space repair only removes spaces
+
+Superfluous spaces are the biggest problem (59% of errors). Repairing them only **removes spaces between existing tokens**: no letter is ever changed, added or dropped. This is checked in code after every run: with all whitespace stripped, the text before and after must be identical. A wrong join (`of the` → `ofthe`) is still possible, but it is measurable and traceable, and never an invented word.
+
+#### Rules for joining tokens
+
+In increasing order of risk:
+
+1. **Letter-spaced runs:** three or more single-letter tokens in a row (`p r o v e n a n c e`) are joined into one word. Legitimate single letters (`a`, `I`, initials like `J. B.`) almost never occur in runs of three or more.
+2. **Gaps between words:** per line, the gap between two fragments of the same word (`M` | `useum`) is usually smaller than a real gap between words. Joining below a per-line threshold uses the image geometry (the word coordinates) instead of guessing at language.
+3. **Lexicon check:** join two fragments if together they form a known word and separately they do not (or one of them is a single capital). The lexicon is built **from the corpus itself**: words such as "Museum", "Kunsthistorisches" and proper names appear correctly elsewhere in the ~5,000 pages. This covers all languages in the text without separate dictionaries.
+
+Rules 2 and 3 can confirm each other: joining only when both agree is the most conservative option.
+
+#### Other errors: flag rather than fix
+
+- **`I` → `1`:** fix automatically only where unambiguous, such as a `1` inside a word made of letters. In ambiguous contexts (`1` vs Roman `I` in a reference), **flag** the case for the validation tool instead of guessing.
+- **Ligatures** (`BieSt`, `ct` → `d`): too few to justify rules; flag at most.
+- **Hyphen difference:** not an OCR repair but a transcription convention, handled in the analysis script.
+
+#### Safeguards
+
+- **Never overwrite the original OCR.** The repaired version is a separate layer, linked to the original word IDs. A joined word gets the combined box of its parts.
+- **Log every change** (rule, tokens) for later review in the validation tool.
+- **Measure both sides against the ground truth:** errors fixed and errors introduced. A rule only stays if it clearly improves the result.
+- **Avoid tuning on the same pages:** with only 12 pages, adjust the rules on half and check them on the other half, or correct a few extra pages as a test set.
+
+#### Possible role for an LLM
+
+At most as a **judge between options generated by the script** ("join these two tokens: yes or no?"), with its output checked against the same invariant so it cannot add text. This is probably unnecessary: the corpus lexicon plus coordinates should cover most cases.
+
+### Next steps
+
+1. **Ask RKD whether the original scans still exist** (TIFF, greyscale or colour, ≥300 dpi). This is the biggest factor for any new OCR.
+2. **Repair the existing OCR** as described above: join superfluous spaces, fix unambiguous `I` → `1` and flag the rest, agree on the hyphen convention. Add a "CER without spaces" metric to the analysis and measure again.
+3. **Compare engines on the same 12 pages,** for example Tesseract (free, local) plus a current ABBYY version or a Transkribus trial, against the ground truth. Measure CER, CER without spaces, and whether word coordinates are available.
+4. **Only re-run OCR for all ~5,000 pages** if an engine clearly beats the repaired version. Even then the PDFs and their hand-made RKD links can stay as they are: the new text with coordinates goes into the database, not into the PDF.
