@@ -1,3 +1,4 @@
-/doc/CRLB_pdfs
+/doc/CRLB_pdfs/*
+!/doc/CRLB_pdfs/specimens
 .venv/
 __pycache__/
