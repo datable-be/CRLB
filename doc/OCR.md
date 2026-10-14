@@ -154,7 +154,7 @@ A test of the quality of the existing OCR text layer on hand-corrected specimen 
 
 #### Specimens
 
-Two catalogue pages and two index pages per volume, drawn at random (seed 42) from pages with at least 50 words, with `scripts/sample_specimens.py` (`make sample_specimens`):
+Two catalogue pages and two index pages per volume, drawn at random (seed 42) from pages with at least 50 words, with `scripts/OCR/sample_specimens.py` (`make sample_specimens`):
 
 | Volume | Catalogue                        | Index                    |
 | ------ | -------------------------------- | ------------------------ |
@@ -166,7 +166,7 @@ Catalogue pages are taken from the bookmark whose title contains "catalog" up to
 
 #### Analysis
 
-`scripts/analyse_specimens.py` (`make analyse_specimens`) compares `gt.txt` with `ocr.txt` for every corrected specimen:
+`scripts/OCR/analyse_specimens.py` (`make analyse_specimens`) compares `gt.txt` with `ocr.txt` for every corrected specimen:
 
 - Both texts are normalised: soft hyphens at line ends are joined, whitespace and line breaks are collapsed; case and punctuation are kept.
 - **CER**: character edit distance / ground-truth characters, split into substitutions, insertions and deletions.
