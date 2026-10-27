@@ -1,4 +1,5 @@
 /doc/CRLB_pdfs/*
 !/doc/CRLB_pdfs/specimens
+/data
 .venv/
 __pycache__/
