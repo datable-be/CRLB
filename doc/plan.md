@@ -717,6 +717,359 @@ Project configuration as in step 1.
 - The `(7)` in a different font (BellMT 10 pt) at the position of an RKD link in XIX (4): possibly text added by the tool that added the links. If so, it must be treated as furniture, not as part of the copy.
 - Whether ABBYY's font sizes are consistent enough across a whole volume for the style rules, or need a tolerance per volume.
 
+## Step 4: extraction
+
+### Goal
+
+Turn the segments of step 3 into structured records that follow the **Rubens Online data model** (RO Datamodel v0.1, [browsable version](https://hvanstappen.github.io/RubensOnline), [spreadsheet](https://docs.google.com/spreadsheets/d/1t_Tt4jtfaT1j-gEBEcGngK_qcSTe3TC07R4XQUFudys)), in particular the data that was not (fully) entered by hand: provenance, exhibition history, literature and the descriptive texts, together with the core data of each work that these hang on.
+
+Step 4 records **what the text says**, verbatim and in the structure of the RO model. Linking values to authorities (RKD Artists, TGN, AAT, Iconclass, Wikidata) and reconciling with the existing RKD/Axiell data is step 5; the `*_id` columns for authorities stay empty in step 4.
+
+### Principles
+
+The same as in steps 2 and 3:
+
+1. **Rules first, LLM where rules fall short.** Step 3 has already cut fields into items (one provenance stage, one literature reference). Most fields can then be interpreted by rules; the LLM is used per item, on short inputs, for what rules cannot do reliably.
+2. **No invented text.** The LLM returns only _spans_ (verbatim substrings of the item) and _choices from a closed list_ (e.g. a transfer method). The code checks that every span occurs in the item text and every choice is in the list; a violation rejects the answer. Normalisation (dates to ISO, dimensions to numbers, list labels to URIs) is always done by rules on the verbatim values.
+3. **Fixed output format.** The LLM output is constrained to a JSON schema during generation (structured output / grammar-constrained decoding), so it is always well-formed.
+4. **Traceable.** Every row records its source segment or item (and so its words and coordinates), the run, the method (`rules` or `llm`), and a review status.
+5. **Local first.** See "Models".
+
+### Mapping from the CRLB entry to the RO model
+
+| CRLB (step 3 segment)                                                                           | RO model                                                                                                                                                                                                                                                                                                               | Method                                                  |
+| :---------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------ |
+| entry, copy, print                                                                              | `Object`; a copy or print is its own Object with an artistic relation (`copy after`, `copied in print by`) to the primary work                                                                                                                                                                                         | rules                                                   |
+| entry number, part                                                                              | `object_identifier` of type `CRLB nummer` (`XIX (4), No. 22`, copies `XIX (4), No. 22, Copy 3`)                                                                                                                                                                                                                        | rules                                                   |
+| RKD link                                                                                        | `object_identifier` of type `RKD ID`                                                                                                                                                                                                                                                                                   | rules                                                   |
+| heading: title                                                                                  | `title_value`, `title_type` = title                                                                                                                                                                                                                                                                                    | rules                                                   |
+| heading: type (`Painting`, `BOZZETTO`, `Drawing`)                                               | `object_name_label` from the _Object names_ list                                                                                                                                                                                                                                                                       | rules (mapping table per volume), LLM if unmapped       |
+| heading/copy: attribution (`Workshop of Rubens`, `attributed to`, `by an anonymous artist`)     | `production_attribution_status` (_Attribution status_ list), `production_actor_label`                                                                                                                                                                                                                                  | rules + LLM                                             |
+| `material` (`Oil on panel; c. 68.5 × 52.5 cm. Inscribed …`)                                     | `material_note` (verbatim), `material_support_label` (_Material_support_ list), `material_label`; dimensions: `dimension_value`, `dimension_unit_label`, `dimension_type_label` (height first, then width, per the style guide); inscriptions: `inscription_type_label`, `inscription_content`, `inscription_position` | rules for material and dimensions; LLM for inscriptions |
+| `location` (`Stuttgart, Staatsgalerie. Inv. no. 2258`; `Whereabouts unknown; presumably lost.`) | current collection: `collection_is_current` = true, holder name, `collection_place_label`, `collection_identifier`; lost or destroyed: `destruction_cause`, `destruction_date_*`                                                                                                                                       | rules + LLM                                             |
+| `date` (`c. 1598–1600`)                                                                         | `production_date_label` (verbatim), `production_date_start`/`_end`                                                                                                                                                                                                                                                     | rules                                                   |
+| `provenance` items                                                                              | per stage either a **collection** stay (holder, place, `collection_entry_date`, `collection_entry_method` from _Transfer method_, removal date) or an **auction** (`auction_label`, organiser, place, dates, `auction_lot_number`, `auction_consignor`, `auction_buyer`, `auction_price_amount`, currency)             | LLM per item, rules for dates, lists and chain order    |
+| `exhibited` items                                                                               | `exhibition_id` (via the volume's exhibitions list → `Exhibition` record: title, venue, place, dates), `exhibition_cat_number`, `exhibition_note`                                                                                                                                                                      | rules                                                   |
+| `literature` items                                                                              | `source_id` (via the volume's abbreviations list → `TextResource` record: author, title, date) or `source_reference` (full citation if not resolved), `source_page_reference`, `source_note` (`as Jan van Eyck`, `repr.`)                                                                                              | rules, LLM for leftovers                                |
+| description paragraphs and notes                                                                | `TextResource` of source type `CRLB-entry`, with paragraphs and notes; figure references removed and `Ibid.` resolved for display (see "Analyses entries")                                                                                                                                                             | rules                                                   |
+| cross-references (`see No. 21`)                                                                 | resolved to the referenced Object's data, recorded as a reference, not copied                                                                                                                                                                                                                                          | rules                                                   |
+
+The provenance chain needs care in the mapping, because the CRLB writes it as one chronological list in which collection stays and sales alternate, while RO separates collections (with entry and removal) from auctions:
+
+- "his sale" or "sale" makes the stage an auction; the consignor is the previous holder when the text says "his/her sale".
+- The removal date of a collection stay is taken from the date of the next stage when the text gives none (recorded as derived, not as stated).
+- `?` before a stage, or "possibly"/"probably", marks it uncertain (style guide: `?` only for an uncertain part of the provenance). RO records uncertainty in notes; the flag is kept in a column so it is not lost.
+- "(as Rubens)" or "(as 'Rubbens')" is the attribution under which the work was sold or listed; it goes into `auction_note` or `collection_entry_note`.
+
+### Schema
+
+All step 4 tables start with `ro_`. Column names follow the RO model where a column corresponds to an RO property; the extra columns (`*_text`, source, run, status) are for traceability and validation and are not exported to RO as such.
+
+```sql
+-- One row per extraction run (per field and method).
+CREATE TABLE ro_runs (
+    id                   INTEGER PRIMARY KEY,
+    started_at           TEXT NOT NULL,
+    field                TEXT NOT NULL,     -- 'object', 'provenance', 'exhibition', 'literature', 'text'
+    method               TEXT NOT NULL CHECK (method IN ('rules', 'llm')),
+    model                TEXT,              -- name, version, quantisation; NULL for rules
+    runtime              TEXT,              -- e.g. 'ollama 0.x', 'llama.cpp server bNNNN'; NULL for rules
+    prompt_sha           TEXT,              -- hash of prompt + JSON schema (both in git)
+    correction_run_id    INTEGER REFERENCES correction_runs(id),
+    segmentation_run_id  INTEGER NOT NULL REFERENCES segmentation_runs(id),
+    version              TEXT NOT NULL,     -- git commit
+    options              TEXT NOT NULL      -- JSON: thresholds, temperature, seed, ...
+);
+
+-- Every extracted row carries these columns (shown once here, written out in schema.sql):
+--   segment_id   INTEGER NOT NULL REFERENCES segments(id)  -- the field or item it comes from
+--   run_id       INTEGER NOT NULL REFERENCES ro_runs(id)
+--   status       TEXT NOT NULL DEFAULT 'unreviewed'
+--                CHECK (status IN ('unreviewed', 'accepted', 'corrected', 'rejected'))
+--   review_note  TEXT
+
+-- Object: one per entry, copy and print.
+CREATE TABLE ro_objects (
+    id                          INTEGER PRIMARY KEY,
+    segment_id ..., run_id ..., status ..., review_note ...,   -- the entry or copy segment
+    part                        TEXT NOT NULL REFERENCES parts(part),
+    crlb_number                 TEXT NOT NULL,   -- '22', '10a', '22 (3)'
+    title_value                 TEXT,
+    title_type_label            TEXT,            -- 'title'
+    object_name_label           TEXT,            -- from Object names, e.g. 'painting (visual work)'
+    object_name_text            TEXT,            -- verbatim: 'Painting', 'BOZZETTO'
+    production_date_label       TEXT,            -- verbatim: 'c. 1598–1600'
+    production_date_start       TEXT,            -- YYYY[-MM[-DD]]
+    production_date_end         TEXT,
+    material_note               TEXT,            -- verbatim: 'Oil on panel'
+    material_support_label      TEXT,            -- from Material_support
+    destruction_cause           TEXT,            -- from Destruction cause
+    destruction_date_start      TEXT,
+    destruction_date_end        TEXT,
+    destruction_text            TEXT             -- verbatim: 'destroyed in 1945', 'presumably lost'
+);
+
+CREATE TABLE ro_object_identifiers (
+    id, object_id INTEGER NOT NULL REFERENCES ro_objects(id),
+    segment_id ..., run_id ..., status ..., review_note ...,
+    object_identifier             TEXT NOT NULL,   -- 'XIX (4), No. 22', '311963'
+    object_identifier_type_label  TEXT NOT NULL,   -- 'CRLB nummer', 'RKD ID'
+    link_id                       INTEGER REFERENCES links(id)
+);
+
+CREATE TABLE ro_attributions (
+    id, object_id ..., segment_id ..., run_id ..., status ..., review_note ...,
+    production_attribution_status  TEXT NOT NULL,  -- from Attribution status
+    production_actor_label         TEXT,           -- 'Rubens', 'Workshop of Rubens', 'anonymous'
+    attribution_text               TEXT NOT NULL,  -- verbatim
+    is_current                     INTEGER NOT NULL
+);
+
+CREATE TABLE ro_dimensions (
+    id, object_id ..., segment_id ..., run_id ..., status ..., review_note ...,
+    dimension_value       REAL NOT NULL,
+    dimension_unit_label  TEXT NOT NULL,     -- 'cm', 'mm'
+    dimension_type_label  TEXT NOT NULL,     -- 'height', 'width', 'diameter', ...
+    dimension_note        TEXT,              -- 'c.', 'approximately', 'sight size'
+    dimensions_text       TEXT NOT NULL      -- verbatim: 'c. 68.5 × 52.5 cm'
+);
+
+CREATE TABLE ro_inscriptions (
+    id, object_id ..., segment_id ..., run_id ..., status ..., review_note ...,
+    inscription_type_label  TEXT,            -- from Inscription Type
+    inscription_content     TEXT,            -- verbatim
+    inscription_position    TEXT,            -- verbatim: 'horizontally below'
+    inscription_note        TEXT             -- verbatim: 'in gold on grey'
+);
+
+-- Provenance and current location: collection stays.
+CREATE TABLE ro_collection_stays (
+    id, object_id ..., segment_id ..., run_id ..., status ..., review_note ...,
+    position                     INTEGER NOT NULL,  -- order in the chain; current location last
+    holder_text                  TEXT NOT NULL,     -- verbatim: 'Duarte Pinto Coehlo', 'Staatsgalerie'
+    collection_type_label        TEXT,              -- from Collection Type (museum, private collection, art dealer, church, ...)
+    collection_place_label       TEXT,              -- verbatim place name
+    collection_identifier        TEXT,              -- inventory number
+    collection_entry_date        TEXT,              -- YYYY[-MM[-DD]]
+    collection_entry_date_text   TEXT,              -- verbatim
+    collection_entry_method      TEXT,              -- from Transfer method
+    collection_entry_note        TEXT,
+    collection_removal_date      TEXT,
+    collection_removal_derived   INTEGER NOT NULL DEFAULT 0,  -- 1 = taken from the next stage
+    collection_removal_method    TEXT,
+    collection_removal_note      TEXT,
+    collection_is_current        INTEGER NOT NULL,
+    uncertain                    INTEGER NOT NULL DEFAULT 0   -- '?', 'possibly', 'probably'
+);
+
+-- Provenance: auctions (one row per object per sale).
+CREATE TABLE ro_auctions (
+    id, object_id ..., segment_id ..., run_id ..., status ..., review_note ...,
+    position                  INTEGER NOT NULL,  -- order in the chain, shared with ro_collection_stays
+    auction_label             TEXT,              -- e.g. 'his sale'
+    auction_organizer_label   TEXT,              -- verbatim: 'Christie’s'
+    auction_place_label       TEXT,              -- verbatim: 'London'
+    auction_date_start        TEXT,
+    auction_date_end          TEXT,
+    auction_date_text         TEXT,              -- verbatim: '20–21 July 2011', '15ff. June 1874'
+    auction_lot_number        TEXT,
+    auction_consignor         TEXT,              -- free text, as in RO
+    auction_buyer             TEXT,              -- free text, as in RO
+    auction_price_amount      TEXT,              -- string, as in RO (pounds/shillings/pence)
+    auction_price_currency    TEXT,              -- from Currencies
+    auction_note              TEXT,              -- e.g. '(as Rubens)'
+    uncertain                 INTEGER NOT NULL DEFAULT 0
+);
+
+-- Exhibitions and literature: the records from the volume's lists (step 3 items) ...
+CREATE TABLE ro_exhibitions (
+    id INTEGER PRIMARY KEY,
+    segment_id ..., run_id ..., status ..., review_note ...,   -- the abbreviation-list item
+    part                   TEXT NOT NULL REFERENCES parts(part),
+    abbreviation           TEXT NOT NULL,     -- 'Liverpool – London, 1998–99'
+    exhibition_title       TEXT,
+    exhibition_venue       TEXT,
+    exhibition_place_label TEXT,
+    exhibition_date_start  TEXT,
+    exhibition_date_end    TEXT,
+    full_citation          TEXT NOT NULL      -- verbatim
+);
+
+CREATE TABLE ro_text_resources (
+    id INTEGER PRIMARY KEY,
+    segment_id ..., run_id ..., status ..., review_note ...,
+    part                   TEXT NOT NULL REFERENCES parts(part),  -- part whose list it comes from, or of the CRLB entry
+    abbreviation           TEXT,              -- 'Jaffé, Catalogo, 1989'; NULL for CRLB entries
+    source_type_label      TEXT NOT NULL,     -- from Source Types: book, article, exhibition catalogue, CRLB-entry, ...
+    source_title           TEXT,
+    source_author          TEXT,
+    source_date            TEXT,
+    full_citation          TEXT,              -- verbatim
+    object_id              INTEGER REFERENCES ro_objects(id)  -- for source type 'CRLB-entry'
+);
+
+-- ... and their use in an entry (step 3 items of 'exhibited' and 'literature').
+CREATE TABLE ro_object_exhibitions (
+    id, object_id ..., segment_id ..., run_id ..., status ..., review_note ...,
+    exhibition_id          INTEGER REFERENCES ro_exhibitions(id),  -- NULL = not resolved
+    exhibition_cat_number  TEXT,
+    exhibition_note        TEXT,
+    reference_text         TEXT NOT NULL     -- verbatim item
+);
+
+CREATE TABLE ro_object_sources (
+    id, object_id ..., segment_id ..., run_id ..., status ..., review_note ...,
+    source_id              INTEGER REFERENCES ro_text_resources(id),  -- NULL = not resolved
+    source_reference       TEXT,             -- full citation if not resolved
+    source_page_reference  TEXT,             -- 'pp. 297–303', 'no. 109a', 'fig. 4'
+    source_note            TEXT,             -- '(as Jan van Eyck)', 'repr.'
+    reference_text         TEXT NOT NULL     -- verbatim item
+);
+
+-- Artistic relations: copy after, copied in print by, study for, ...; and cross-references.
+CREATE TABLE ro_related_objects (
+    id, object_id ..., segment_id ..., run_id ..., status ..., review_note ...,
+    related_object_id                        INTEGER REFERENCES ro_objects(id),
+    related_object_artistic_relation_type    TEXT,   -- from Artistic relation types
+    related_object_artistic_description      TEXT,   -- when there is no related record
+    relation_text                            TEXT NOT NULL  -- verbatim, e.g. 'see No. 21'
+);
+
+-- Descriptive text of the CRLB entry (TextResource of type 'CRLB-entry').
+CREATE TABLE ro_text_paragraphs (
+    id INTEGER PRIMARY KEY,
+    text_resource_id  INTEGER NOT NULL REFERENCES ro_text_resources(id),
+    segment_id ..., run_id ..., status ..., review_note ...,   -- the paragraph segment
+    position          INTEGER NOT NULL,
+    text              TEXT NOT NULL,     -- corrected text, note markers kept
+    text_display      TEXT NOT NULL      -- figure references removed, for Rubens Online
+);
+
+CREATE TABLE ro_text_notes (
+    id INTEGER PRIMARY KEY,
+    text_resource_id  INTEGER NOT NULL REFERENCES ro_text_resources(id),
+    segment_id ..., run_id ..., status ..., review_note ...,   -- the note segment
+    number            TEXT NOT NULL,
+    text              TEXT NOT NULL,
+    text_display      TEXT NOT NULL,     -- 'Ibid.' and 'op. cit.' resolved, figure references removed
+    paragraph_id      INTEGER REFERENCES ro_text_paragraphs(id)  -- paragraph containing the first marker
+);
+
+-- LLM calls, for auditing and reuse: what was asked, what came back, what was accepted.
+CREATE TABLE ro_llm_calls (
+    id            INTEGER PRIMARY KEY,
+    run_id        INTEGER NOT NULL REFERENCES ro_runs(id),
+    segment_id    INTEGER NOT NULL REFERENCES segments(id),
+    input_text    TEXT NOT NULL,
+    output_json   TEXT,
+    valid         INTEGER NOT NULL,   -- passed schema, span and list checks
+    error         TEXT,               -- why it was rejected
+    duration_ms   INTEGER NOT NULL,
+    tokens_in     INTEGER,
+    tokens_out    INTEGER
+);
+```
+
+Notes:
+
+- `ro_collection_stays` and `ro_auctions` share `position`, so the provenance chain can be read back in the order of the text.
+- Collections, agents and places are not separate records yet: holders, consignors and places are verbatim text. Making them RO `Collection`, `Agent` and `Place` records with URIs is reconciliation (step 5); the same holder appears under different spellings across volumes.
+- The RO `Auction` class is one record per sale event shared by all objects in it; step 4 keeps one row per object per sale, and step 5 merges rows that describe the same sale (same organiser, place and date).
+- The `ro_llm_calls` table makes every LLM decision auditable and allows rerunning the checks or comparing models without calling the model again.
+- An export script turns the active runs into RO records (JSON per object, following the RO property names), for NocoDB/MongoDB or the Rubens Online datahub. Only rows with `status` other than `rejected` are exported; whether `unreviewed` rows are exported is a decision for the client.
+
+### Rules per field
+
+- **Object core** (heading, material, date, location): patterns per volume, based on the style guide's fixed order (`Painting (Fig. x), attributed to …, Antwerp, St Paul’s Church; canvas, 158 x 106 cm.`). Dimensions: `H × W unit` with `x`, `×` or `:` (older volumes: `16 : 21.5 cm`), decimal point or comma; `c.`/`approximately` into `dimension_note`. Support and object name through mapping tables (`panel` → `paneel (hout)`, `canvas` → `doek`, `Painting` → `schilderij`, `BOZZETTO` → `olieverfschets`), kept in git and extended per volume.
+- **Literature and exhibitions:** split already done in step 3. Each item is matched to the abbreviation list of the same part: the longest abbreviation that the item starts with (fuzzy on OCR text, exact on born-digital), the rest parsed into page reference, number, figures and note. Unmatched items are listed; the LLM is only used to split the leftovers.
+- **Abbreviation lists:** each list item is split into abbreviation and full citation by layout (hanging indent) and pattern; the full citation is parsed into author, title, place, date by patterns from the 2015 bibliography rules, with the LLM for leftovers in older volumes.
+- **Provenance:** per item: rules recognise the frequent fixed forms (`sale, London (Christie’s), 20–21 July 2011, lot 550`; `his sale`; `with the dealer X, Brussels, 1971`); everything else goes to the LLM. Dates in any form (`15ff. June 1874`, `in 1796 ?`, `(1612 - 23 October 1652)`) are parsed by rules into start/end.
+- **Descriptive text:** paragraphs and notes from step 3; `text_display` by rules: remove `(Fig. 58)`, `(No. 15; Fig. 58)` and similar, resolve `Ibid.` to the previous note's citation and `op. cit.`/`loc. cit.` to the last citation of that author.
+
+### LLM tasks
+
+Each task is one prompt with a JSON schema, both in git (`scripts/extraction/prompts/<task>.md` and `.json`), with a few examples taken from the development set. Input is one item plus minimal context (the field name, the previous stage for provenance).
+
+| Task                | Input                                        | Output                                                                                                                                                                           |
+| :------------------ | :------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provenance_stage`  | one provenance item                          | kind (collection/auction), spans for holder, place, dates, organiser, lot, price, consignor, buyer, note; choices for transfer method, collection type, currency; uncertain flag |
+| `inscription`       | the inscription part of the material field   | spans for type word, position, content, note; choice for inscription type                                                                                                        |
+| `location`          | the location field                           | spans for holder, place, inventory number; choice for collection type; lost/destroyed with cause                                                                                 |
+| `attribution`       | heading or copy attribution                  | span for actor; choice for attribution status                                                                                                                                    |
+| `citation_leftover` | an unmatched literature or abbreviation item | spans for author, title, date, pages                                                                                                                                             |
+
+The checks on every answer: valid against the schema; every span is a substring of the input (after whitespace normalisation); every choice in the list; dates only as spans (parsed by rules afterwards). Rejected answers are stored in `ro_llm_calls` with the reason and the item is flagged for review. Temperature 0 and a fixed seed, so a rerun gives the same answer.
+
+### Models
+
+The hardware available for development has no GPU, 15 GB RAM and 8 CPU cores. That is enough for a quantised model of about 7–8 billion parameters at a few tokens per second: fine for the POC (tens of entries), too slow for the whole corpus (tens of thousands of items).
+
+Escalation path, each step only if the measurement of the previous one is insufficient:
+
+1. **POC, local:** two open models of about 8B parameters, compared on the same development items: a Qwen model (strong at structured output) and a Mistral model (EU, the project's preference). Exact versions are chosen when the work starts.
+2. **Full run, open model on EU infrastructure:** an open model of about 24–32B parameters on a rented GPU server in the EU, or the Mistral API (EU).
+3. **Frontier model** (Claude, OpenAI, Gemini), only for the fields where 1 and 2 do not reach the threshold.
+
+Runtime: Ollama or the llama.cpp server (a llamafile is llama.cpp packaged as one file; the results are the same), called from Python over HTTP, with the JSON schema passed for constrained decoding. The runtime is behind a small interface so a cloud API can be swapped in for step 2 or 3 of the escalation without changing the tasks.
+
+Every model and runtime used is added to `README.md` under AI usage.
+
+### Measurement
+
+**Reference data.** The Rubenshuis has registered several volumes by hand in Adlib/Axiell, managed by the RKD (2023–2025, including XIX (4) and XII, see the presentation). Those records give, for the same works, the provenance, exhibitions and literature as entered by people. An export for the POC volumes is to be requested. Where no reference exists, a small hand-checked set is made by the user from the review file.
+
+**Development and test split** per volume, as in step 2: rules and prompts are tuned on development entries only; test entries are used once per version.
+
+**Metrics** per field and per method:
+
+- precision and recall of extracted values against the reference (exact and normalised match), per RO property;
+- for provenance: correct number and order of stages, correct kind (collection/auction);
+- for literature and exhibitions: share of items resolved to an abbreviation;
+- for the LLM: share of rejected answers (schema, span, list), duration per item, and the projected time for the whole corpus;
+- for review: share of rows accepted unchanged.
+
+**Threshold.** As in step 2, the user sets beforehand what is sufficient per field. Fields below the threshold move up the escalation path; fields above it stay local.
+
+### Order of work
+
+1. XIX (4), a few entries: object core, literature and exhibitions (rules only) and the abbreviation list.
+2. XIX (4): provenance with rules plus the local LLM; comparison of the two local models.
+3. The same for II part 1 (`02_1_links`), with the OCR correction of step 2.
+4. Descriptive text and notes (rules).
+5. Measurement against the reference data; decision on escalation per field.
+
+### Code
+
+New directory `scripts/extraction/`:
+
+- `extract_objects.py`, `extract_lists.py` (abbreviation and exhibition lists), `extract_references.py` (literature, exhibitions), `extract_provenance.py`, `extract_texts.py`: each writes one `ro_runs` row and its tables, and prints only counts.
+- `llm.py`: the runtime interface (local server or API), schema-constrained calls, the span and list checks, logging to `ro_llm_calls`.
+- `prompts/`: one prompt and one JSON schema per task.
+- `vocabularies/`: the RO value lists used (Object names, Material_support, Attribution status, Transfer method, Collection Type, Currencies, Inscription Type, Source Types, Artistic relation types) as CSV with label and URI, and the CRLB-to-RO mapping tables.
+- `review_extraction.py`: writes a local review file per entry (the PDF region next to the extracted rows), never to the console.
+- `export_ro.py`: writes RO JSON records from the active runs.
+
+New dependencies, to be confirmed when the code is written: an HTTP client for the model runtime, and a schema library (for example Pydantic) to define the JSON schemas once and validate answers.
+
+### Tests
+
+`tests/extraction/`, on hand-made items, with the LLM replaced by a stub that returns fixed answers:
+
+- dimensions in the different notations (`68.5 × 52.5 cm`, `16 : 21.5 cm`, `c. 64 × 51 cm`, `66,5 × 51 cm`) give the right values, unit, type and note;
+- literature items are matched to the right abbreviation, including the longest match when one abbreviation is a prefix of another, and page references are split off;
+- the fixed provenance forms (`sale, London (Christie’s), 20–21 July 2011, lot 550`, `his sale`) are parsed by rules, with the consignor taken from the previous stage for `his sale`;
+- dates (`15ff. June 1874`, `20–21 July 2011`, `in 1796 ?`, `c. 1598–1600`) give the right start and end;
+- an LLM answer with a span that is not in the input, or a choice outside the list, is rejected and logged;
+- the provenance chain keeps its order across collection stays and auctions, and a derived removal date is marked as derived;
+- `Ibid.` in a note is resolved to the previous note's citation, and figure references are removed from `text_display`;
+- the export produces RO property names and leaves out rejected rows.
+
+### Points to check first
+
+- Whether the RO model will get its own records for collections, agents and auctions with Rubens Online URIs, or link to RKD records; this decides what step 5 has to produce.
+- How the RKD/Axiell export of the registered volumes is structured, so the comparison can be automated.
+- Whether `unreviewed` rows may be exported.
+
 ## Volumes without a PDF
 
 Eleven volumes exist only as Word files: I, VII, VIII, X, XIII (1), XV, XVI, XXII (1), XXIV, XXVI (1) and XXVI (2.3). Four of them also have original scans (XV, XXII (1), XXVI (1), XXVI (2.3); VI and XIII (3) have scans as well but already have a PDF). There is no decision yet; the options are:
