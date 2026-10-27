@@ -165,7 +165,11 @@ CREATE TABLE words (
     y0        REAL NOT NULL,
     x1        REAL NOT NULL,
     y1        REAL NOT NULL,
-    text      TEXT NOT NULL
+    text      TEXT NOT NULL,
+    font      TEXT NOT NULL,         -- font name of the word's dominant span, e.g. 'PalatinoLTStd-Bold'
+    size      REAL NOT NULL,         -- font size of that span, points
+    flags     INTEGER NOT NULL,      -- PyMuPDF span flags: 1 superscript, 2 italic, 16 bold, ...
+    styles    INTEGER NOT NULL       -- number of distinct (font, size, flags) spans in the word; > 1 = mixed
 );
 CREATE INDEX words_page ON words(page_id);
 
@@ -221,7 +225,7 @@ For each document, in manifest order:
 4. Insert the `toc` rows from `doc.get_toc(simple=True)` (PyMuPDF page numbers are 1-based, -1 for none; store 0-based, NULL for none).
 5. For each page:
     - insert the `pages` row: `page.get_label()` (NULL if empty), `page.rotation`, `page.rect`, `page.mediabox`, and the text from `page.get_text("text", sort=False)`;
-    - insert `words` from `page.get_text("words", sort=False)`;
+    - insert `words` from `page.get_text("words", sort=False)`, with the typography of each word (see below);
     - insert `links` from `page.get_links()`.
 6. Commit once per document.
 
@@ -232,6 +236,8 @@ Extraction settings, also recorded in `extraction_runs.options`:
 - `sort=False`: keep the order of the content stream. ABBYY and InDesign write the text in their own reading order; sorting by position can mix columns.
 - Default text flags, **without** `TEXT_DEHYPHENATE`: soft hyphens (`\xad`) and line-end hyphens stay as they are.
 - No normalisation (no NFC, no whitespace collapsing). That belongs to later steps.
+
+Typography per word. `get_text("words")` gives no font information, so it is added from `page.get_text("dict", sort=False)` with the same flags. The `block_no` and `line_no` of a word refer to the same block and line in the `dict` output; within that line, the word gets the font, size and flags of the span that covers most of its characters (by bounding-box overlap), and `styles` counts how many different spans it overlaps. Typography is the main signal for segmentation (step 3): bold headings, notes in a smaller size, superscript note markers, italic locations and titles, and small caps, which ABBYY records as a capital in a larger size followed by letters in a smaller size (`P rov en a n ce`: 10.5 pt and 8.4 pt).
 
 Expected size of `crlb.sqlite`: on the order of 20,000 pages and several million words, so probably 1–2 GB, mostly `words`. The exact number will be clear after the first build.
 
@@ -262,6 +268,7 @@ Project configuration:
 - a path with spaces (as in `X_links RKD Research.pdf`) works;
 - page, word, link and bookmark counts match what was generated;
 - word coordinates match those of `page.get_text("words")` on the original;
+- font, size and flags are right for bold, italic and superscript words, and a word with two styles gets `styles = 2`;
 - soft hyphens survive unchanged in `pages.text` and `words.text`;
 - `excerpt_of` is resolved to the right document id;
 - an FTS query finds a word on the right page;
@@ -284,7 +291,8 @@ Run locally (`make build_database`); the output is counts only.
 ### Out of scope for this step
 
 - OCR correction (space repair, `I`/`1` and the other confusions): step 2.
-- Splitting the text into catalogue entries and extracting fields.
+- Splitting the text into sections, catalogue entries and fields: step 3.
+- Extracting structured data from the fields.
 - NER.
 - Re-OCR of the scans.
 - The validation interface.
@@ -481,6 +489,161 @@ Project configuration as in step 1 (`pyproject.toml` paths, Makefile targets, `h
 - the invariant check catches a deliberately wrong correction;
 - every raw word belongs to exactly one corrected token, and the rebuilt page text is right;
 - lexicon building: soft-hyphen joining, hard-hyphen skipping, no digit tokens, OCR tokens never count as pieces.
+
+## Step 3: segmentation
+
+### Goal
+
+Divide the text of each document into its structural parts and record them in the database: the sections of a volume, the catalogue entries and their copies, and the fields within an entry. This is the basis for the extraction of provenance, exhibition history, literature and descriptive texts (step 4), because what a piece of text means is decided mainly by where it is in that structure.
+
+Segmentation does not change or interpret text; it only marks ranges of words. Like step 2a, it is deterministic: rules and patterns, configured per volume, no LLM.
+
+### Structure of a volume
+
+From the bookmarks, the running heads and two catalogue pages each of XIX (4) (born-digital, 2016) and II (ABBYY OCR, 1970s), the structure is a tree:
+
+```
+document
+├── page furniture        running heads, page numbers, marginal marks
+├── section               front matter, introduction/essays, catalogue, appendices,
+│                         abbreviations/bibliography, exhibitions, illustrations, indexes
+│   └── entry             catalogue number + title, e.g. "No. 22. Augustus: Painting (Fig. 79)"
+│       ├── field         heading, material/dimensions, location, date, provenance,
+│       │                 exhibited, copies, literature, description, notes
+│       └── copy          "(1) Painting (Fig. 80), whereabouts unknown; …" inside "copies"
+│           └── field     material/dimensions, location, provenance ("prov.:"), literature ("lit.:")
+```
+
+An entry has the same skeleton in both volumes, 40 years apart:
+
+| Part                              | XIX (4), born-digital                                                                             | II, ABBYY OCR                                                                                      |
+| :-------------------------------- | :------------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------- |
+| heading                           | `No. 22. Augustus: Painting (Fig. 79)`, bold 11.2 pt, title bold italic                           | `10a. THE SACRIFICE OF THE OLD COVENANT: BOZZETTO`, number bold 14 pt, title capitals 7 pt         |
+| material, dimensions, inscription | first block after the heading                                                                     | first block after the heading                                                                      |
+| location, inventory number        | italic                                                                                            | italic                                                                                             |
+| date                              | own block (`c. 1598–1600`)                                                                        | not always present                                                                                 |
+| labelled fields                   | small caps, extracted as lowercase + colon: `provenance:`, `exhibited:`, `copies:`, `literature:` | small caps, extracted as `P rov en a n ce:` (capital 10.5 pt, rest 8.4 pt), `Copy:`, `Literature:` |
+| copies                            | `(1)`, `(2)`, … inside `copies:`, each with `prov.:` and `lit.:`                                  | same                                                                                               |
+| description                       | untitled text after the labelled fields                                                           | same                                                                                               |
+| notes                             | end of the entry, 7.5 pt, `1.⇥…`, superscript markers in the text                                 | end of the entry, 7.5 pt, `19 See …`, markers as plain digits or `*`                               |
+| RKD link                          | on the heading and on each copy                                                                   | on the heading and on each copy                                                                    |
+
+The variation between volumes is in the label wording and case, the heading format, the note markers, the layout (two columns in XIX (4), one in II) and the page furniture. This is what the per-volume configuration describes.
+
+### Schema
+
+```sql
+-- One row per segmentation run.
+CREATE TABLE segmentation_runs (
+    id          INTEGER PRIMARY KEY,
+    started_at  TEXT NOT NULL,     -- ISO 8601, UTC
+    version     TEXT NOT NULL,     -- git commit of the scripts
+    options     TEXT NOT NULL      -- JSON: the volume configurations used
+);
+
+-- One row per structural part. A segment is a contiguous range of words in
+-- reading order, possibly across pages, with a parent in the tree.
+CREATE TABLE segments (
+    id             INTEGER PRIMARY KEY,
+    run_id         INTEGER NOT NULL REFERENCES segmentation_runs(id),
+    document_id    INTEGER NOT NULL REFERENCES documents(id),
+    parent_id      INTEGER REFERENCES segments(id),
+    kind           TEXT NOT NULL,   -- 'furniture', 'section', 'entry', 'copy', 'field'
+    label          TEXT,            -- section name, entry number ('22', '10a', '1-1'),
+                                    -- copy number ('(3)'), field name ('provenance', 'notes', ...)
+    first_word_id  INTEGER NOT NULL REFERENCES words(id),
+    last_word_id   INTEGER NOT NULL REFERENCES words(id),
+    rule           TEXT NOT NULL,   -- which rule created it
+    confidence     TEXT NOT NULL CHECK (confidence IN ('certain', 'probable', 'uncertain')),
+    reason         TEXT,            -- e.g. 'bold 11.2 pt line matching heading pattern; RKD link'
+    link_id        INTEGER REFERENCES links(id)  -- RKD link anchoring this entry or copy, if any
+);
+CREATE INDEX segments_run_document ON segments(run_id, document_id);
+CREATE INDEX segments_parent ON segments(parent_id);
+
+-- Printed page numbers, derived from the page furniture.
+CREATE TABLE printed_pages (
+    run_id        INTEGER NOT NULL REFERENCES segmentation_runs(id),
+    page_id       INTEGER NOT NULL REFERENCES pages(id),
+    printed       TEXT,             -- printed page number, NULL for unnumbered pages
+    rule          TEXT NOT NULL,    -- 'furniture' (read from the page) or 'interpolated'
+    PRIMARY KEY (run_id, page_id)
+);
+```
+
+Notes:
+
+- Segments refer to raw `words` ids, so segmentation does not depend on the OCR correction (step 2). The corrected tokens of step 2 map onto the same word ranges, so a field can be read in raw or corrected form.
+- Segments of the same `kind` under the same parent do not overlap. Because ranges are contiguous, an entry that continues on the next page also spans the running head and page number in between; those words are covered by a `furniture` segment, and anything that reads the text of a segment skips words inside furniture segments.
+- `printed_pages` is needed because the PDFs have no page labels while citations and the indexes use printed page numbers (II: PDF page 298 is printed page 291; XIX (4): PDF page 89 is printed page 90). Page numbers that cannot be read (blank pages, plates) are interpolated from their neighbours.
+- `confidence` makes it possible to review the uncertain cases first.
+
+### Rules
+
+The rules run in this order, each on the result of the previous one:
+
+1. **Page furniture.** Words whose position and style repeat over many pages of a document: running heads at the top (XIX (4): `CATALOGUE No. 22`, 6.8 pt), page numbers at the bottom (XIX (4): 7 pt; II: bold 14 pt), marginal marks (XIX (4): a 5 pt number at the left edge). Detected per document by position band and style, configurable per volume. The page numbers fill `printed_pages`; the running heads are kept as evidence for rule 3 and the checks.
+2. **Sections.** From the bookmarks (`toc`) where present. Otherwise from the running heads (`CATALOGUE …`) and from section headings (large or bold lines matching names such as Introduction, Catalogue, Appendix, Abbreviations, Index), with the printed table of contents as a check.
+3. **Entries** within the catalogue section. An entry starts at a heading line that matches the volume's heading pattern (catalogue number, title, type, figure references) and has the heading style. Supporting evidence, each raising the confidence: an RKD link on the heading line, a running head with the same number on the same or next page, a number that follows the previous one in the numbering scheme (`1`, `1a`, `2`, …; `1-1` for fragments). OCR errors in the number (`10«` for `10a`) are tolerated through the style and the numbering sequence, and recorded in `reason`. An entry ends where the next entry or section starts.
+4. **Fields** within an entry:
+    - `heading`: the heading line(s).
+    - `material`, `location`, `date`: the blocks between the heading and the first label, in that order; `location` recognised by italics, `date` by a date pattern.
+    - labelled fields: a block that starts with a label from the volume's label list (`provenance`, `exhibited`, `copies`/`copy`, `literature`, `drawings`, `prints`, …), recognised by text (fuzzy, case-insensitive, spaces ignored) and, in OCR volumes, by the small-caps size pattern. The field runs until the next label or the description.
+    - `description`: the untitled body text after the last labelled field.
+    - `notes`: the trailing run of note-size lines starting with a note number, up to the next entry.
+5. **Copies** within a `copies` field: each starts at `(n)` at the start of a line or block, supported by an RKD link at that position; within a copy, sub-fields after `prov.:`, `lit.:` and similar abbreviations.
+6. **Cross-references** such as `provenance: see No. 21.` are recorded as a field with label `provenance` and a `reason` noting the reference. Resolving them is step 4.
+
+Patterns, label lists, style thresholds and furniture bands are kept in one configuration file per volume (`data_manifest/segmentation/<part>.toml`, in git), with shared defaults. Configurations are developed on a few pages and then checked on the whole volume.
+
+### Checks and measurement
+
+Built-in checks per document, reported as counts:
+
+- entry numbers are consecutive in the numbering scheme, without gaps or duplicates;
+- every entry has a heading and at least material/dimensions or location;
+- in `_links` documents: every RKD link lies in the heading of an entry or at the start of a copy, and every entry has a link (exceptions listed);
+- running heads agree with the entry segments on their pages;
+- printed page numbers increase by one per page, apart from interpolated pages;
+- no words outside a section (except furniture).
+
+Reference data:
+
+- **The Rubenshuis registration lists** (an Excel list per volume with record numbers such as `19`, `19a`, `19C11`, one row per entry and copy) give the expected entries and copies per volume. Comparing them with the segments measures completeness without manual work. To be requested from the Rubenshuis.
+- A small hand-checked set: for each POC volume, a few entries whose segment boundaries and fields are checked by the user against the PDF. A review script writes the segments of a sample of entries to a local file (HTML with the page images and boxes, or CSV), never to the console.
+
+### Order of work
+
+1. POC volumes: XIX (4) (born-digital, `_links`) and II part 1 (`02_1_links`, ABBYY): furniture, sections, entries, copies, fields.
+2. Check against the registration lists, if available.
+3. Other volumes, one at a time, each with its own configuration. Older ABBYY volumes and born-digital volumes without links or bookmarks will need more rules.
+
+### Code
+
+New directory `scripts/segmentation/`:
+
+- `segment.py`: runs the rules for the given documents with their configuration, writes `segmentation_runs`, `segments` and `printed_pages`. Prints only counts and check results.
+- `review_segments.py`: writes a review file for a sample of entries (local, not printed).
+- `data_manifest/segmentation/`: the per-volume configuration files.
+
+Project configuration as in step 1.
+
+### Tests
+
+`tests/segmentation/`, on small generated PDFs that imitate both layouts (two columns with paragraph blocks; one column with a block per line), built through the step 1 extraction:
+
+- furniture is detected and printed page numbers are read and interpolated;
+- entries are found by heading style and pattern, including a damaged number (`10«.`) between `10.` and `11.`;
+- labelled fields are found in both forms (`provenance:` and `P rov en a n ce:` with two sizes);
+- copies are split at `(n)` and their `prov.:`/`lit.:` sub-fields are found;
+- notes at the end of an entry are a separate field;
+- an entry continuing on the next page, past the furniture, stays one segment;
+- the checks report a gap in the numbering and an RKD link outside any entry.
+
+### Points to check first
+
+- The `(7)` in a different font (BellMT 10 pt) at the position of an RKD link in XIX (4): possibly text added by the tool that added the links. If so, it must be treated as furniture, not as part of the copy.
+- Whether ABBYY's font sizes are consistent enough across a whole volume for the style rules, or need a tolerance per volume.
 
 ## Volumes without a PDF
 
