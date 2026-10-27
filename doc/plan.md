@@ -1,5 +1,99 @@
 # Plan
 
+## Implementation
+
+How the steps below are built as software. The end result of the project is data, not software; the software is there to produce that data reproducibly and to document how it was produced.
+
+### Environment and reproducibility
+
+- **uv** manages Python and all Python dependencies. `uv.lock` pins every package version and hash; a `.python-version` file (`uv python pin 3.12`) pins the interpreter. All commands run as `uv run --locked …`, so an outdated lock file stops the run instead of being updated silently.
+- **No container.** PyMuPDF ships with MuPDF built in and uv's Python builds include SQLite with FTS5, so there are no system libraries to install. A Dockerfile can be added on top of uv later if a deployment asks for it; it is not needed to reproduce the data.
+- **What uv does not pin** is recorded separately, because it affects results more than any Python package:
+    - the model runtime (Ollama or llama.cpp server) and its version;
+    - each model by name, quantisation and file digest; models downloaded from Hugging Face (for example GLiNER) by repository and commit hash;
+    - external tools such as Pandoc, with their version.
+      They are listed in `README.md` (with the AI tools, under AI usage) and stored with every run that uses them (`model`, `runtime` and `options` of the run tables).
+- **The data records its own provenance.** Every run stores the git commit of the code, its options and the runs it builds on; every LLM answer is stored (`llm_calls`). Results are reproduced from these records, not by calling a model again: LLM output is not guaranteed to be identical across hardware and runtime versions, even at temperature 0.
+
+### Code structure
+
+One Python package with a command-line interface, instead of separate scripts per step:
+
+```
+src/crlb/
+├── cli.py              the `crlb` command (argparse), one subcommand per action
+├── db.py               connections to crlb.sqlite and pdfs.sqlite, schema versions
+├── runs.py             run rows, active runs, git commit and options of a run
+├── text.py             the effective text of a word range (see below)
+├── llm.py              the model interface: local runtime or API, schema-constrained calls, span and list checks, `llm_calls`
+├── review.py           reviews, status updates and effective values
+├── schema/             one SQL file per step, applied in order
+├── ocr/                the OCR quality test (specimen sampling and analysis)
+├── database/           step 1
+├── correction/         step 2
+├── segmentation/       step 3
+├── extraction/         step 4 (with prompts/ and vocabularies/)
+└── enrichment/         step 5 (with entry_rules/)
+tests/                  one folder per subpackage, as now
+```
+
+- **CLI:** `crlb <command>`, declared in `pyproject.toml` under `[project.scripts]`. Examples: `crlb list-pdfs`, `crlb build`, `crlb correct`, `crlb segment`, `crlb extract provenance`, `crlb normalise`, `crlb export markdown`, `crlb set-active <step> <run>`, `crlb ocr sample`. `crlb --help` lists them all. Only the standard library (`argparse`) is used for the CLI.
+- **Makefile** targets call the CLI (`uv run --locked crlb build data_manifest/documents.csv data`), so the usual `make <target>` workflow stays, and `make help` lists the targets.
+- **Shared code** lives once in the core modules: opening the database and the PDFs (`db.py`, with `open_pdf` checking the hash), run bookkeeping (`runs.py`), the effective text (`text.py`), the LLM interface (`llm.py`, used by steps 2c, 4 and 5) and reviews (`review.py`).
+- **Tests** import `crlb` as an installed package; the per-folder `pythonpath`, ruff `src` and ty `extra-paths` settings are no longer needed. The existing `scripts/OCR` scripts move into `crlb.ocr` (a refactor without change of behaviour, checked by the existing tests); `scripts/archive` stays as it is.
+- **Conventions** for every command: type annotations and a one-line docstring on every function; ruff, ruff format and ty clean; the console only shows counts, checks and warnings, never CRLB text; anything with CRLB text (review files, samples, exports) is written to `data/`.
+
+### Database schema and versions
+
+The database grows step by step: each step adds its tables. The schema is kept as one SQL file per step in `src/crlb/schema/` (`01_text.sql`, `02_correction.sql`, `03_segmentation.sql`, `04_extraction.sql`, `05_enrichment.sql`, `06_review.sql`, and later changes as further numbered files). A table `schema_version` records which files have been applied; `crlb` applies missing files in order when it opens the database. This way a later step never requires rebuilding the database from scratch. `pdfs.sqlite` has only the sqlar table.
+
+### Effective text
+
+Every step after step 1 reads text through one function, `crlb.text`, so that "the text of a segment" means the same everywhere. The effective text of a range of word ids is:
+
+1. the tokens of the active correction run (step 2) for those words; for every document there is one, because the soft-hyphen rule R3 also runs on born-digital documents;
+2. with words inside `furniture` segments of the active segmentation run left out;
+3. with corrections from `reviews` applied;
+4. with a token that crosses the start or end of the range (a boundary conflict, step 3) replaced by the raw words inside the range.
+
+It returns the text together with the word ids of each token, so every result can be traced back to coordinates.
+
+### Shared tables
+
+Two tables are used by all steps:
+
+```sql
+-- The run that later steps and exports use, per step. Every step can be run
+-- several times; older runs stay in the database for comparison.
+CREATE TABLE active_runs (
+    step     TEXT PRIMARY KEY,      -- '2' (correction), '3' (segmentation), '4:<field>' (extraction),
+                                    -- '5b' (normalisation), '5c' (enrichment), '5d' (named entities),
+                                    -- '5e' (RKD comparison), '5f' (RKD link products)
+    run_id   INTEGER NOT NULL,      -- id in the run table of that step
+    set_at   TEXT NOT NULL,         -- ISO 8601, UTC
+    note     TEXT                   -- why this run was made active
+);
+
+-- Every call to a language model, in any step: what was asked, what came back,
+-- whether it was accepted. Allows auditing and comparing models without new calls.
+CREATE TABLE llm_calls (
+    id            INTEGER PRIMARY KEY,
+    run_table     TEXT NOT NULL,      -- 'correction_runs', 'ro_runs', 'enrichment_runs'
+    run_id        INTEGER NOT NULL,
+    task          TEXT NOT NULL,      -- e.g. 'provenance_stage', 'judge_candidates', 'ner'
+    first_word_id INTEGER REFERENCES words(id),   -- the input range, where the input is text
+    last_word_id  INTEGER REFERENCES words(id),
+    input_text    TEXT NOT NULL,
+    output_json   TEXT,
+    valid         INTEGER NOT NULL,   -- passed schema, span and list checks
+    error         TEXT,               -- why it was rejected
+    duration_ms   INTEGER NOT NULL,
+    tokens_in     INTEGER,
+    tokens_out    INTEGER
+);
+```
+
+A run becomes active only by an explicit command (`crlb set-active`), after its measurement, never automatically. For step 2 the active run is the last run of a chain (`based_on`), for example the 2b run built on the 2a run. Reviews and corrections are described in "Review and corrections (all steps)".
 ## Step 1: text database
 
 ### Goal
@@ -92,7 +186,7 @@ Two SQLite files, both in `data/` and therefore outside git:
 
 | File               | Content                                                                          | Shareable                               |
 | :----------------- | :------------------------------------------------------------------------------- | :-------------------------------------- |
-| `data/crlb.sqlite` | documents, pages, words, links, bookmarks, full-text index                       | the text may be, the PDFs are not in it |
+| `data/crlb.sqlite` | documents, pages, words, links, bookmarks, full-text index; the tables of the later steps | no (CRLB text)                          |
 | `data/pdfs.sqlite` | the PDF files as raw bytes, in the [sqlar](https://sqlite.org/sqlar.html) format | no (copyright)                          |
 
 `crlb.sqlite` refers to a PDF by its path and SHA-256 hash. When a later step needs the PDF itself (to render a page or highlight a word), it attaches `pdfs.sqlite` and checks the hash, so the coordinates are guaranteed to belong to that exact file.
@@ -121,7 +215,7 @@ Size: the selected PDFs total roughly 6–7 GB. The largest file (`CRLB_11_1_II.
 PRAGMA foreign_keys = ON;
 
 -- One row per build, for provenance.
-CREATE TABLE extraction_runs (
+CREATE TABLE build_runs (
     id            INTEGER PRIMARY KEY,
     started_at    TEXT NOT NULL,      -- ISO 8601, UTC
     tool          TEXT NOT NULL,      -- 'pymupdf'
@@ -140,7 +234,7 @@ CREATE TABLE parts (
 -- One row per PDF file.
 CREATE TABLE documents (
     id             INTEGER PRIMARY KEY,
-    run_id         INTEGER NOT NULL REFERENCES extraction_runs(id),
+    run_id         INTEGER NOT NULL REFERENCES build_runs(id),
     path           TEXT NOT NULL UNIQUE,   -- = sqlar.name in pdfs.sqlite
     sha256         TEXT NOT NULL,          -- hex digest of the PDF bytes
     size           INTEGER NOT NULL,       -- bytes
@@ -149,6 +243,7 @@ CREATE TABLE documents (
     section        TEXT NOT NULL CHECK (section IN ('main', 'index')),
     text_source    TEXT NOT NULL CHECK (text_source IN ('ocr', 'born_digital')),
     excerpt_of     INTEGER REFERENCES documents(id),
+    derived_from   INTEGER REFERENCES documents(id),  -- PDF copies made by the project (step 5f)
     note           TEXT,                   -- from the manifest
     pdf_version    TEXT,                   -- e.g. 'PDF-1.4'
     title          TEXT,                   -- PDF metadata, verbatim
@@ -227,12 +322,13 @@ CREATE VIRTUAL TABLE pages_fts USING fts5(
 
 Notes on the schema:
 
+- `page_label` is mostly empty: of the current PDFs only `CRLB_11_2_*` have page labels. Printed page numbers are therefore derived from the page furniture in step 3 (`printed_pages`).
 - Part and file are separate on purpose: `SELECT ... WHERE part = 'XXVI (2.1)'` gives all files of that part.
 - Searches over the whole corpus exclude excerpts (`WHERE excerpt_of IS NULL`) to avoid counting index pages twice.
 - `pages.text` and `words` both come from the same PyMuPDF extraction of the same page. `words` is the basis for coordinates and corrections; `pages.text` is the convenient form for reading and searching.
 - Later layers (OCR corrections, entries, extracted fields) go into **new tables** that refer to `words.id`, `pages.id` or `documents.id`. The tables of this step are never updated after the build.
 - The `links` table matters beyond this step: in the `_links` files each RKDimages link marks a catalogue entry and carries its RKD permalink.
-- The `toc` table is needed to find the catalogue and index sections (see `catalogue_pages` in `scripts/OCR/sample_specimens.py`). Several born-digital PDFs have no bookmarks; for those the sections must be found another way in a later step.
+- The `toc` table is needed to find the catalogue and index sections (see `catalogue_pages` in the specimen sampling, `crlb.ocr`). Several born-digital PDFs have no bookmarks; for those the sections must be found another way in a later step.
 
 ### Extraction
 
@@ -250,7 +346,7 @@ For each document, in manifest order:
 
 After all documents: resolve `excerpt_of` paths to document ids, fill the FTS index (`INSERT INTO pages_fts(pages_fts) VALUES ('rebuild')`) and run `ANALYZE`.
 
-Extraction settings, also recorded in `extraction_runs.options`:
+Extraction settings, also recorded in `build_runs.options`:
 
 - `sort=False`: keep the order of the content stream. ABBYY and InDesign write the text in their own reading order; sorting by position can mix columns.
 - Default text flags, **without** `TEXT_DEHYPHENATE`: soft hyphens (`\xad`) and line-end hyphens stay as they are.
@@ -262,22 +358,18 @@ Expected size of `crlb.sqlite`: on the order of 20,000 pages and several million
 
 ### Code
 
-New directory `scripts/database/`:
+Subpackage `crlb.database` (see "Implementation"):
 
-- `schema.sql`: the two schemas above.
-- `list_pdfs.py`: lists candidate PDFs under the given directories with page count, metadata, link and bookmark counts and the proposed `text_source`, as a starting point for the manifest. Prints no PDF text.
-- `build_database.py`: command line `build_database.py <manifest> <out_dir>`.
-    - Creates `<out_dir>/crlb.sqlite` and `<out_dir>/pdfs.sqlite`.
-    - Refuses to run if either file exists (same behaviour as `sample_specimens.py`).
-    - Prints only counts per document (pages, words, links per kind, bookmarks) and warnings. It never prints PDF text.
-    - Functions (each with type annotations and a one-line docstring), roughly: `read_manifest`, `create_databases`, `store_pdf`, `insert_document`, `insert_toc`, `insert_page`, `build`, `main`.
-- `pdf_store.py`: `open_pdf(conn, document_id) -> pymupdf.Document`, which reads the bytes from the attached `pdfs.sqlite`, checks the SHA-256 against `documents.sha256` and raises if they differ. This is the entry point for later validation work.
+- `src/crlb/schema/01_text.sql`: the schema of `crlb.sqlite` above; the sqlar table of `pdfs.sqlite`.
+- `crlb list-pdfs <dir>…`: lists candidate PDFs with page count, metadata, link and bookmark counts and the proposed `text_source`, as a starting point for the manifest. Prints no PDF text.
+- `crlb build <manifest> <out_dir>`:
+    - creates `<out_dir>/crlb.sqlite` and `<out_dir>/pdfs.sqlite`;
+    - refuses to run if either file exists (same behaviour as the specimen sampling);
+    - prints only counts per document (pages, words, links per kind, bookmarks) and warnings, never PDF text;
+    - functions roughly: `read_manifest`, `create_databases`, `store_pdf`, `insert_document`, `insert_toc`, `insert_page`, `build`.
+- `crlb.db.open_pdf(conn, document_id) -> pymupdf.Document`: reads the bytes from the attached `pdfs.sqlite`, checks the SHA-256 against `documents.sha256` and raises if they differ. This is the entry point for later validation work.
 
-Project configuration:
-
-- `pyproject.toml`: add `scripts/database` to pytest `pythonpath`, ruff `src` and ty `extra-paths`.
-- `Makefile`: targets `list_pdfs` and `build_database: uv run scripts/database/build_database.py data_manifest/documents.csv data`; add them to `help`.
-- No new dependencies: `sqlite3` and `hashlib` are in the standard library; FTS5 is included in Python's bundled SQLite.
+Makefile targets `list_pdfs` and `build_database` call these commands. No new dependencies: `sqlite3` and `hashlib` are in the standard library; FTS5 is included in the SQLite of uv's Python builds.
 
 ### Tests
 
@@ -303,9 +395,9 @@ Ruff, ruff format and ty must be clean.
 Run locally (`make build_database`); the output is counts only.
 
 - Every manifest row is present, with `page_count` equal to the number of `pages` rows.
-- `uri` link counts match the `list_pdfs.py` overview (e.g. 735 for `CRLB_12_I_links`, 3 identical query links for the `26_2_*_1` files, 0 for files without links).
+- `uri` link counts match the `crlb list-pdfs` overview (e.g. 735 for `CRLB_12_I_links`, 3 identical query links for the `26_2_*_1` files, 0 for files without links).
 - No `text_source` warnings.
-- Spot check: for a few specimen pages from the OCR quality test, `pages.text` equals the `ocr.txt` from `sample_specimens.py` (same extraction), compared by a script that reports only equal/different.
+- Spot check: for a few specimen pages from the OCR quality test, `pages.text` equals the `ocr.txt` of the specimen sampling (same extraction), compared by a script that reports only equal/different.
 - Spot check of coordinates: render one born-digital and one OCR page from `pdfs.sqlite` with the word boxes drawn on it and look at them locally.
 
 ### Out of scope for this step
@@ -322,6 +414,8 @@ Run locally (`make build_database`); the output is counts only.
 ### Goal
 
 Improve the text of the OCR documents (`text_source = 'ocr'`) as far as possible **without an LLM**, measure the result, and only consider LLM-assisted correction if the measured quality is not sufficient.
+
+Born-digital documents get a correction run as well, with only rule R3 (soft hyphen at line end): their text is correct, but words broken at line ends (`biogra­phy`) must be joined like in the OCR text. So every document has a corrected layer, and later steps read all text the same way (see "Effective text" under "Implementation").
 
 The OCR quality test ([OCR.md](OCR.md)) showed that superfluous spaces are the main error: 1192 of 2009 errors on the specimens, with letter-spaced small-caps headings (`p r o v e n a n c e`) as a special case. Without the inserted spaces, CER drops from 1.4–9.2% to about 1.1–2.5% per file.
 
@@ -390,7 +484,7 @@ The rules work per line, on the words of `words` in their stored order (`block_n
 
 If all pieces are words ("a part", "in to", "may be"), the tokens are only joined if the joined form is clearly more frequent in the born-digital text than the bigram (for example 20 times as frequent, both counts from the born-digital lexicon). Otherwise the case is flagged.
 
-**R3, soft hyphen at line end.** A word that ends a line with `\xad` is joined to the first word of the next line in the same block. The soft hyphen is removed. Hard hyphens are never removed.
+**R3, soft hyphen at line end.** A word that ends a line with `\xad` is joined to the first word of the next line in the same block. The soft hyphen is removed. Hard hyphens are never removed. R3 is the only rule that also runs on born-digital documents.
 
 **Gap between word boxes (to be investigated first).** A superfluous ABBYY space may be narrower than a real space on the same line. Before the rules are finalised, the gaps are measured on the development pages (see "Measurement"): the distribution of gaps at superfluous spaces against real spaces, relative to the font size (word box height). If the distributions separate well, a small gap becomes an extra condition for R2, or allows R2 when all pieces are words. If not, the gap is not used.
 
@@ -424,7 +518,8 @@ CREATE TABLE corrected_words (
     x1             REAL NOT NULL,
     y1             REAL NOT NULL,
     rule           TEXT,            -- 'R1', 'R2', 'R3' or NULL (unchanged)
-    reason         TEXT             -- e.g. 'pieces: M|useum; lexicon bd=412'
+    reason         TEXT,            -- e.g. 'pieces: M|useum; lexicon bd=412'
+    status         TEXT NOT NULL DEFAULT 'unreviewed'
 );
 CREATE INDEX corrected_words_run_page ON corrected_words(run_id, page_id);
 
@@ -439,20 +534,7 @@ CREATE TABLE correction_flags (
     candidate      TEXT NOT NULL,   -- the joined form that was not applied
     reason         TEXT NOT NULL    -- e.g. 'all pieces are words; ratio 3.1 < 20'
 );
-
--- The run that later steps and exports use, per step. Steps 2, 3 and 4 can
--- each be run several times; older runs stay in the database for comparison.
-CREATE TABLE active_runs (
-    step     TEXT PRIMARY KEY,      -- '2' (correction), '3' (segmentation), '4:<field>' (extraction),
-                                    -- '5b' (normalisation), '5c' (enrichment), '5d' (named entities), '5e' (RKD comparison),
-                                    -- '5f' (RKD link products)
-    run_id   INTEGER NOT NULL,      -- id in the run table of that step
-    set_at   TEXT NOT NULL,         -- ISO 8601, UTC
-    note     TEXT                   -- why this run was made active
-);
 ```
-
-`active_runs` is introduced here because step 2 is the first step with several runs; it is used the same way by steps 3 and 4. A run becomes active only by an explicit command, after its measurement, never automatically. For step 2 the active run is the last run of the chain (`based_on`), e.g. the 2b run built on the 2a run.
 
 A join is a contiguous range of word ids, because words are stored in reading order and a join never crosses a block. The corrected page text is rebuilt from `corrected_words`: tokens joined by a space within a line, a newline between lines, an empty line between blocks. For a fair comparison, the raw page text is rebuilt from `words` in the same way.
 
@@ -460,7 +542,7 @@ A join is a contiguous range of word ids, because words are stored in reading or
 
 **Ground truth.** The 12 hand-corrected specimen pages (6 files × 2 pages) are split once into a development set and a test set: per file one page each, chosen at random with a fixed seed and recorded in a file in git. Rules and thresholds are tuned on the 6 development pages only. The test pages are used once per version of the rules, for the final figures. If the test set turns out to be too small to decide, more pages are corrected by hand for it (not taken from the development set).
 
-**Metrics on the specimens** (with `analyse_specimens.py`, extended to compare a corrected text with the ground truth):
+**Metrics on the specimens** (with `crlb ocr analyse`, extended to compare a corrected text with the ground truth):
 
 - CER, CER loose and WER, raw and corrected;
 - CER with all whitespace removed: must be equal for raw and corrected (check of the invariant, apart from soft hyphens);
@@ -503,15 +585,13 @@ A candidate for comparison is the OCR-correction model tried earlier on CRLB tex
 
 ### Code
 
-New directory `scripts/correction/`:
+Subpackage `crlb.correction`, schema `02_correction.sql`:
 
-- `build_lexicon.py`: fills `lexicon` and `bigrams` in `crlb.sqlite`.
-- `correct_spaces.py`: runs step 2a on all OCR documents (or a selection), writes `correction_runs`, `corrected_words` and `correction_flags`. Checks the invariant per page. Prints only counts.
-- `measure_gaps.py`: the gap investigation on the development pages; prints the distributions as counts and quantiles only.
-- `sample_joins.py`: writes the review sample to CSV.
-- `analyse_specimens.py` (existing, in `scripts/OCR/`): extended with an option to compare corrected text, and with join precision and recall.
-
-Project configuration as in step 1 (`pyproject.toml` paths, Makefile targets, `help`).
+- `crlb lexicon`: fills `lexicon` and `bigrams`.
+- `crlb correct`: runs step 2a on all OCR documents (or a selection) and R3 on the born-digital documents, writes `correction_runs`, `corrected_words` and `correction_flags`. Checks the invariant per page. Prints only counts.
+- `crlb correct measure-gaps`: the gap investigation on the development pages; prints the distributions as counts and quantiles only.
+- `crlb correct sample`: writes the review sample to CSV in `data/`.
+- `crlb ocr analyse` (the existing specimen analysis, moved into `crlb.ocr`): extended with an option to compare corrected text, and with join precision and recall.
 
 ### Tests
 
@@ -602,7 +682,8 @@ CREATE TABLE segments (
     rule           TEXT NOT NULL,   -- which rule created it
     confidence     TEXT NOT NULL CHECK (confidence IN ('certain', 'probable', 'uncertain')),
     reason         TEXT,            -- e.g. 'bold 11.2 pt line matching heading pattern; RKD link'
-    link_id        INTEGER REFERENCES links(id)  -- RKD link anchoring this entry or copy, if any
+    link_id        INTEGER REFERENCES links(id),  -- RKD link anchoring this entry or copy, if any
+    status         TEXT NOT NULL DEFAULT 'unreviewed'
 );
 CREATE INDEX segments_run_document ON segments(run_id, document_id);
 CREATE INDEX segments_parent ON segments(parent_id);
@@ -613,6 +694,7 @@ CREATE TABLE printed_pages (
     page_id       INTEGER NOT NULL REFERENCES pages(id),
     printed       TEXT,             -- printed page number, NULL for unnumbered pages
     rule          TEXT NOT NULL,    -- 'furniture' (read from the page) or 'interpolated'
+    status        TEXT NOT NULL DEFAULT 'unreviewed',
     PRIMARY KEY (run_id, page_id)
 );
 
@@ -623,7 +705,8 @@ CREATE TABLE note_refs (
     word_id          INTEGER NOT NULL REFERENCES words(id),     -- the marker ('2', '*'), or the word carrying it
     note_segment_id  INTEGER NOT NULL REFERENCES segments(id),  -- kind = 'note'
     rule             TEXT NOT NULL,   -- 'superscript', 'digit after word', ...
-    confidence       TEXT NOT NULL CHECK (confidence IN ('certain', 'probable', 'uncertain'))
+    confidence       TEXT NOT NULL CHECK (confidence IN ('certain', 'probable', 'uncertain')),
+    status           TEXT NOT NULL DEFAULT 'unreviewed'
 );
 CREATE INDEX note_refs_note ON note_refs(note_segment_id);
 ```
@@ -660,7 +743,7 @@ The rules run in this order, each on the result of the previous one:
     - `literature`, `lit.:`, `exhibited`, `exh.:`: at `;` outside brackets (one reference each);
     - in the abbreviations/bibliography and exhibitions sections: one item per abbreviation with its full citation, recognised by the hanging-indent layout and the abbreviation pattern (author, short title, year; or place, year).
       The separator and the item pattern are part of the volume configuration, because the conventions changed over time (the 2015 bibliography rules apply from V (1), 2014).
-10. **Index entries.** In the index documents and index sections: one `item` per index entry (heading term with its page references), with sub-entries as child items, recognised by indentation and the page-reference pattern (`123`, `123–125`, `n. 12`, `Fig. 58`, `No. 22`); entries continuing in the next column or on the next page stay one item. Step 5 parses them into terms with page references.
+10. **Index entries.** In the index documents and index sections: one `item` per index entry (heading term with its page references), with sub-entries as child items, recognised by indentation and the page-reference pattern (`123`, `123–125`, `n. 12`, `Fig. 58`, `No. 22`); entries continuing in the next column or on the next page stay one item. Step 5 parses them into terms with page references. Each index is segmented once: where a born-digital index excerpt exists (`excerpt_of`), the excerpt is used and the index pages of the main PDF are marked as a `section` labelled `index (see excerpt)` without items, so no index term is counted twice.
 
 Patterns, label lists, style thresholds and furniture bands are kept in one configuration file per volume (`data_manifest/segmentation/<part>.toml`, in git), with shared defaults. Configurations are developed on a few pages and then checked on the whole volume.
 
@@ -681,7 +764,7 @@ Built-in checks per document, reported as counts:
 Reference data:
 
 - **The Rubenshuis registration lists** (an Excel list per volume with record numbers such as `19`, `19a`, `19C11`, one row per entry and copy) give the expected entries and copies per volume. Comparing them with the segments measures completeness without manual work. To be requested from the Rubenshuis.
-- A small hand-checked set: for each POC volume, a few entries whose segment boundaries and fields are checked by the user against the PDF. A review script writes the segments of a sample of entries to a local file (HTML with the page images and boxes, or CSV), never to the console.
+- The reference records of step 4: they also confirm the segments of their entries (boundaries of entry, copies, fields, items), so they are the hand-checked set for step 3 as well. A review command writes the segments of a sample of entries to a local file (HTML with the page images and boxes, or CSV) for checking them, never to the console.
 
 ### Order of work
 
@@ -691,14 +774,13 @@ Reference data:
 
 ### Code
 
-New directory `scripts/segmentation/`:
+Subpackage `crlb.segmentation`, schema `03_segmentation.sql`:
 
-- `segment.py`: runs the rules for the given documents with their configuration, writes `segmentation_runs`, `segments`, `printed_pages` and `note_refs`. Prints only counts and check results.
-- `set_active_run.py`: sets the active run of a step in `active_runs` (shared with steps 2 and 4).
-- `review_segments.py`: writes a review file for a sample of entries (local, not printed).
-- `data_manifest/segmentation/`: the per-volume configuration files.
+- `crlb segment`: runs the rules for the given documents with their configuration, writes `segmentation_runs`, `segments`, `printed_pages` and `note_refs`. Prints only counts and check results.
+- `crlb segment review`: writes a review file for a sample of entries to `data/` (not printed).
+- `data_manifest/segmentation/`: the per-volume configuration files (in git).
 
-Project configuration as in step 1.
+`crlb set-active` (core, see "Implementation") sets the active run of this and every other step.
 
 ### Tests
 
@@ -728,7 +810,7 @@ Project configuration as in step 1.
 
 Turn the segments of step 3 into structured records that follow the **Rubens Online data model** (RO Datamodel v0.1, [browsable version](https://hvanstappen.github.io/RubensOnline), [spreadsheet](https://docs.google.com/spreadsheets/d/1t_Tt4jtfaT1j-gEBEcGngK_qcSTe3TC07R4XQUFudys)), in particular the data that was not (fully) entered by hand: provenance, exhibition history, literature and the descriptive texts, together with the core data of each work that these hang on.
 
-Step 4 records **what the text says**, verbatim and in the structure of the RO model. Linking values to authorities (RKD Artists, TGN, AAT, Iconclass, Wikidata) and reconciling with the existing RKD/Axiell data is step 5; the `*_id` columns for authorities stay empty in step 4.
+Step 4 records **what the text says**, verbatim and in the structure of the RO model. Normalising values to the RKD lists and entry instructions, linking them to authorities (RKD Artists, TGN, AAT, Iconclass, Wikidata) and reconciling with the existing RKD/Axiell data is step 5. The step 4 tables have no authority columns; the URIs of the RO `*_id` properties are added in step 5 (`cluster_uris`) and combined at export.
 
 ### Target: Rubens Online records or RKDimages fields
 
@@ -747,10 +829,19 @@ What the RKD manual adds for step 4 and 5 (RKDimages, screens 1, 6, 7 and 8):
 The same as in steps 2 and 3:
 
 1. **Rules first, LLM where rules fall short.** Step 3 has already cut fields into items (one provenance stage, one literature reference). Most fields can then be interpreted by rules; the LLM is used per item, on short inputs, for what rules cannot do reliably.
-2. **No invented text.** The LLM returns only _spans_ (verbatim substrings of the item) and _choices from a closed list_ (e.g. a transfer method). The code checks that every span occurs in the item text and every choice is in the list; a violation rejects the answer. Normalisation (dates to ISO, dimensions to numbers, list labels to URIs) is always done by rules on the verbatim values.
+2. **No invented text.** The LLM returns only _spans_ (verbatim substrings of the item) and _choices from a closed list_ (e.g. a transfer method). The code checks that every span occurs in the item text and every choice is in the list; a violation rejects the answer. Parsing the verbatim values into the RO structure (dates to ISO start and end, dimensions to numbers, list choices to their RO label) is always done by rules.
 3. **Fixed output format.** The LLM output is constrained to a JSON schema during generation (structured output / grammar-constrained decoding), so it is always well-formed.
-4. **Traceable.** Every row records its source segment or item (and so its words and coordinates), the run, the method (`rules` or `llm`), and a review status.
+4. **Traceable.** Every row records its source segment or item and its word range (and so its coordinates), the run, the method (`rules` or `llm`), and a review status.
 5. **Local first.** See "Models".
+
+**Division of work with step 5.** A value goes through four stages, each kept separately:
+
+| Stage | Example | Where |
+| :--- | :--- | :--- |
+| verbatim | `c. 1598–1600`, `Duarte Pinto Coehlo`, `£3 4s 2d` | step 4, `*_text` columns |
+| parsed into the RO structure | start `1598`, end `1600`; holder `Duarte Pinto Coehlo`; amount `£3 4s 2d` | step 4 |
+| in the RKD form, with control-list terms | date remark; `Pinto Coelho, Duarte`; `3.4.2` + `Lsd` | step 5b, `normalised_values` |
+| with LOD URIs | RKDartists, TGN, AAT URIs | step 5c, `cluster_uris` |
 
 ### Mapping from the CRLB entry to the RO model
 
@@ -787,7 +878,7 @@ All step 4 tables start with `ro_`. Column names follow the RO model where a col
 CREATE TABLE ro_runs (
     id                   INTEGER PRIMARY KEY,
     started_at           TEXT NOT NULL,
-    field                TEXT NOT NULL,     -- 'object', 'provenance', 'exhibition', 'literature', 'text'
+    field                TEXT NOT NULL,     -- 'lists', 'object', 'provenance', 'exhibition', 'literature', 'text'
     method               TEXT NOT NULL CHECK (method IN ('rules', 'llm', 'reference')),
     model                TEXT,              -- name, version, quantisation; NULL for rules
     runtime              TEXT,              -- e.g. 'ollama 0.x', 'llama.cpp server bNNNN'; NULL for rules
@@ -798,17 +889,19 @@ CREATE TABLE ro_runs (
     options              TEXT NOT NULL      -- JSON: thresholds, temperature, seed, ...
 );
 
--- Every extracted row carries these columns (shown once here, written out in schema.sql):
---   segment_id   INTEGER NOT NULL REFERENCES segments(id)  -- the field or item it comes from
---   run_id       INTEGER NOT NULL REFERENCES ro_runs(id)
---   status       TEXT NOT NULL DEFAULT 'unreviewed'
---                CHECK (status IN ('unreviewed', 'accepted', 'corrected', 'rejected'))
---   review_note  TEXT
+-- Every extracted row carries these columns (shown once here, written out in 04_extraction.sql):
+--   segment_id     INTEGER NOT NULL REFERENCES segments(id)  -- the field or item it comes from
+--   first_word_id  INTEGER NOT NULL REFERENCES words(id)     -- the same source as a word range,
+--   last_word_id   INTEGER NOT NULL REFERENCES words(id)     -- stable across segmentation runs
+--   run_id         INTEGER NOT NULL REFERENCES ro_runs(id)
+--   status         TEXT NOT NULL DEFAULT 'unreviewed'
+--                  CHECK (status IN ('unreviewed', 'accepted', 'corrected', 'rejected'))
+--   note           TEXT                                      -- remark made when the row was created
 
 -- Object: one per entry, copy and print.
 CREATE TABLE ro_objects (
     id                          INTEGER PRIMARY KEY,
-    segment_id ..., run_id ..., status ..., review_note ...,   -- the entry or copy segment
+    segment_id ..., first_word_id ..., last_word_id ..., run_id ..., status ..., note ...,   -- the entry or copy segment
     part                        TEXT NOT NULL REFERENCES parts(part),
     crlb_number                 TEXT NOT NULL,   -- '22', '10a', '22 (3)'
     title_value                 TEXT,
@@ -828,14 +921,14 @@ CREATE TABLE ro_objects (
 
 CREATE TABLE ro_object_identifiers (
     id, object_id INTEGER NOT NULL REFERENCES ro_objects(id),
-    segment_id ..., run_id ..., status ..., review_note ...,
+    segment_id ..., first_word_id ..., last_word_id ..., run_id ..., status ..., note ...,
     object_identifier             TEXT NOT NULL,   -- 'XIX (4), No. 22', '311963'
     object_identifier_type_label  TEXT NOT NULL,   -- 'CRLB nummer', 'RKD ID'
     link_id                       INTEGER REFERENCES links(id)
 );
 
 CREATE TABLE ro_attributions (
-    id, object_id ..., segment_id ..., run_id ..., status ..., review_note ...,
+    id, object_id ..., segment_id ..., first_word_id ..., last_word_id ..., run_id ..., status ..., note ...,
     production_attribution_status  TEXT NOT NULL,  -- from Attribution status
     production_actor_label         TEXT,           -- 'Rubens', 'Workshop of Rubens', 'anonymous'
     attribution_text               TEXT NOT NULL,  -- verbatim
@@ -843,7 +936,7 @@ CREATE TABLE ro_attributions (
 );
 
 CREATE TABLE ro_dimensions (
-    id, object_id ..., segment_id ..., run_id ..., status ..., review_note ...,
+    id, object_id ..., segment_id ..., first_word_id ..., last_word_id ..., run_id ..., status ..., note ...,
     dimension_value       REAL NOT NULL,
     dimension_unit_label  TEXT NOT NULL,     -- 'cm', 'mm'
     dimension_type_label  TEXT NOT NULL,     -- 'height', 'width', 'diameter', ...
@@ -852,7 +945,7 @@ CREATE TABLE ro_dimensions (
 );
 
 CREATE TABLE ro_inscriptions (
-    id, object_id ..., segment_id ..., run_id ..., status ..., review_note ...,
+    id, object_id ..., segment_id ..., first_word_id ..., last_word_id ..., run_id ..., status ..., note ...,
     inscription_type_label  TEXT,            -- from Inscription Type
     inscription_content     TEXT,            -- verbatim
     inscription_position    TEXT,            -- verbatim: 'horizontally below'
@@ -861,7 +954,7 @@ CREATE TABLE ro_inscriptions (
 
 -- Provenance and current location: collection stays.
 CREATE TABLE ro_collection_stays (
-    id, object_id ..., segment_id ..., run_id ..., status ..., review_note ...,
+    id, object_id ..., segment_id ..., first_word_id ..., last_word_id ..., run_id ..., status ..., note ...,
     position                     INTEGER NOT NULL,  -- order in the chain; current location last
     holder_text                  TEXT NOT NULL,     -- verbatim: 'Duarte Pinto Coehlo', 'Staatsgalerie'
     collection_type_label        TEXT,              -- from Collection Type (museum, private collection, art dealer, church, ...)
@@ -882,7 +975,7 @@ CREATE TABLE ro_collection_stays (
 
 -- Provenance: auctions (one row per object per sale).
 CREATE TABLE ro_auctions (
-    id, object_id ..., segment_id ..., run_id ..., status ..., review_note ...,
+    id, object_id ..., segment_id ..., first_word_id ..., last_word_id ..., run_id ..., status ..., note ...,
     position                  INTEGER NOT NULL,  -- order in the chain, shared with ro_collection_stays
     auction_label             TEXT,              -- e.g. 'his sale'
     auction_organizer_label   TEXT,              -- verbatim: 'Christie’s'
@@ -902,7 +995,7 @@ CREATE TABLE ro_auctions (
 -- Exhibitions and literature: the records from the volume's lists (step 3 items) ...
 CREATE TABLE ro_exhibitions (
     id INTEGER PRIMARY KEY,
-    segment_id ..., run_id ..., status ..., review_note ...,   -- the abbreviation-list item
+    segment_id ..., first_word_id ..., last_word_id ..., run_id ..., status ..., note ...,   -- the abbreviation-list item
     part                   TEXT NOT NULL REFERENCES parts(part),
     abbreviation           TEXT NOT NULL,     -- 'Liverpool – London, 1998–99'
     exhibition_title       TEXT,
@@ -915,7 +1008,7 @@ CREATE TABLE ro_exhibitions (
 
 CREATE TABLE ro_text_resources (
     id INTEGER PRIMARY KEY,
-    segment_id ..., run_id ..., status ..., review_note ...,
+    segment_id ..., first_word_id ..., last_word_id ..., run_id ..., status ..., note ...,
     part                   TEXT NOT NULL REFERENCES parts(part),  -- part whose list it comes from, or of the CRLB entry
     abbreviation           TEXT,              -- 'Jaffé, Catalogo, 1989'; NULL for CRLB entries
     source_type_label      TEXT NOT NULL,     -- from Source Types: book, article, exhibition catalogue, CRLB-entry, ...
@@ -928,7 +1021,7 @@ CREATE TABLE ro_text_resources (
 
 -- ... and their use in an entry (step 3 items of 'exhibited' and 'literature').
 CREATE TABLE ro_object_exhibitions (
-    id, object_id ..., segment_id ..., run_id ..., status ..., review_note ...,
+    id, object_id ..., segment_id ..., first_word_id ..., last_word_id ..., run_id ..., status ..., note ...,
     exhibition_id          INTEGER REFERENCES ro_exhibitions(id),  -- NULL = not resolved
     exhibition_cat_number  TEXT,
     exhibition_note        TEXT,
@@ -936,7 +1029,7 @@ CREATE TABLE ro_object_exhibitions (
 );
 
 CREATE TABLE ro_object_sources (
-    id, object_id ..., segment_id ..., run_id ..., status ..., review_note ...,
+    id, object_id ..., segment_id ..., first_word_id ..., last_word_id ..., run_id ..., status ..., note ...,
     source_id              INTEGER REFERENCES ro_text_resources(id),  -- NULL = not resolved
     source_reference       TEXT,             -- full citation if not resolved
     source_page_reference  TEXT,             -- 'pp. 297–303', 'no. 109a', 'fig. 4'
@@ -946,7 +1039,7 @@ CREATE TABLE ro_object_sources (
 
 -- Artistic relations: copy after, copied in print by, study for, ...; and cross-references.
 CREATE TABLE ro_related_objects (
-    id, object_id ..., segment_id ..., run_id ..., status ..., review_note ...,
+    id, object_id ..., segment_id ..., first_word_id ..., last_word_id ..., run_id ..., status ..., note ...,
     related_object_id                        INTEGER REFERENCES ro_objects(id),
     related_object_artistic_relation_type    TEXT,   -- from Artistic relation types
     related_object_artistic_description      TEXT,   -- when there is no related record
@@ -957,7 +1050,7 @@ CREATE TABLE ro_related_objects (
 CREATE TABLE ro_text_paragraphs (
     id INTEGER PRIMARY KEY,
     text_resource_id  INTEGER NOT NULL REFERENCES ro_text_resources(id),
-    segment_id ..., run_id ..., status ..., review_note ...,   -- the paragraph segment
+    segment_id ..., first_word_id ..., last_word_id ..., run_id ..., status ..., note ...,   -- the paragraph segment
     position          INTEGER NOT NULL,
     text              TEXT NOT NULL,     -- corrected text, note markers kept
     text_display      TEXT NOT NULL      -- figure references removed, for Rubens Online
@@ -966,26 +1059,13 @@ CREATE TABLE ro_text_paragraphs (
 CREATE TABLE ro_text_notes (
     id INTEGER PRIMARY KEY,
     text_resource_id  INTEGER NOT NULL REFERENCES ro_text_resources(id),
-    segment_id ..., run_id ..., status ..., review_note ...,   -- the note segment
+    segment_id ..., first_word_id ..., last_word_id ..., run_id ..., status ..., note ...,   -- the note segment
     number            TEXT NOT NULL,
     text              TEXT NOT NULL,
     text_display      TEXT NOT NULL,     -- 'Ibid.' and 'op. cit.' resolved, figure references removed
     paragraph_id      INTEGER REFERENCES ro_text_paragraphs(id)  -- paragraph containing the first marker
 );
 
--- LLM calls, for auditing and reuse: what was asked, what came back, what was accepted.
-CREATE TABLE ro_llm_calls (
-    id            INTEGER PRIMARY KEY,
-    run_id        INTEGER NOT NULL REFERENCES ro_runs(id),
-    segment_id    INTEGER NOT NULL REFERENCES segments(id),
-    input_text    TEXT NOT NULL,
-    output_json   TEXT,
-    valid         INTEGER NOT NULL,   -- passed schema, span and list checks
-    error         TEXT,               -- why it was rejected
-    duration_ms   INTEGER NOT NULL,
-    tokens_in     INTEGER,
-    tokens_out    INTEGER
-);
 ```
 
 Notes:
@@ -993,8 +1073,10 @@ Notes:
 - `ro_collection_stays` and `ro_auctions` share `position`, so the provenance chain can be read back in the order of the text.
 - Collections, agents and places are not separate records yet: holders, consignors and places are verbatim text. Making them RO `Collection`, `Agent` and `Place` records with URIs is reconciliation (step 5); the same holder appears under different spellings across volumes.
 - The RO `Auction` class is one record per sale event shared by all objects in it; step 4 keeps one row per object per sale, and step 5 merges rows that describe the same sale (same organiser, place and date).
-- The `ro_llm_calls` table makes every LLM decision auditable and allows rerunning the checks or comparing models without calling the model again.
-- An export script turns the active runs into RO records (JSON per object, following the RO property names), for NocoDB/MongoDB or the Rubens Online datahub. Only rows with `status` other than `rejected` are exported; whether `unreviewed` rows are exported is a decision for the client.
+- The word range (`first_word_id`, `last_word_id`) is stored next to `segment_id` because segment ids change with every segmentation run while words never change. Reference records, review carry-over and comparisons between runs use the word range.
+- `note` is a remark made when the row is created (by the extraction or the annotator); later decisions are in `reviews`.
+- Every LLM call is stored in `llm_calls` (see "Implementation"), which makes every LLM decision auditable and allows rerunning the checks or comparing models without calling the model again.
+- An export script turns the active runs into RO records (JSON per object, following the RO property names), in the format agreed with the client. Only rows with `status` other than `rejected` are exported; whether `unreviewed` rows are exported is a decision for the client.
 
 ### Rules per field
 
@@ -1006,7 +1088,7 @@ Notes:
 
 ### LLM tasks
 
-Each task is one prompt with a JSON schema, both in git (`scripts/extraction/prompts/<task>.md` and `.json`), with a few examples taken from the development set. Input is one item plus minimal context (the field name, the previous stage for provenance).
+Each task is one prompt with a JSON schema, both in git (`src/crlb/extraction/prompts/<task>.md` and `.json`), with a few examples taken from the development set. Input is one item plus minimal context (the field name, the previous stage for provenance).
 
 | Task                | Input                                        | Output                                                                                                                                                                           |
 | :------------------ | :------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1016,7 +1098,7 @@ Each task is one prompt with a JSON schema, both in git (`scripts/extraction/pro
 | `attribution`       | heading or copy attribution                  | span for actor; choice for attribution status                                                                                                                                    |
 | `citation_leftover` | an unmatched literature or abbreviation item | spans for author, title, date, pages                                                                                                                                             |
 
-The checks on every answer: valid against the schema; every span is a substring of the input (after whitespace normalisation); every choice in the list; dates only as spans (parsed by rules afterwards). Rejected answers are stored in `ro_llm_calls` with the reason and the item is flagged for review. Temperature 0 and a fixed seed, so a rerun gives the same answer.
+The checks on every answer: valid against the schema; every span is a substring of the input (after whitespace normalisation); every choice in the list; dates only as spans (parsed by rules afterwards). Rejected answers are stored in `llm_calls` with the reason and the item is flagged for review. Temperature 0 and a fixed seed, so a rerun gives the same answer.
 
 ### Models
 
@@ -1036,9 +1118,9 @@ Every model and runtime used is added to `README.md` under AI usage.
 
 The offer states: "Op basis van de analyse, datamapping en reeds aanwezige data in RKD/Axiell, worden referentierecords aangemaakt. Deze referentierecords worden gebruikt voor controle, evaluatie en ontwikkeling van de AI prompt." Reference records are the ground truth for step 4, for the rules and the LLM alike: they say, for a selection of entries, exactly which rows step 4 should produce. They are made by hand.
 
-**What a reference record contains.** For one entry (and its copies and prints): every row step 4 should produce, in the same tables and columns as the extraction (`ro_objects`, `ro_dimensions`, `ro_collection_stays`, `ro_auctions`, `ro_object_sources`, …), with the verbatim values as they are in the CRLB text and the list choices (transfer method, collection type, attribution status, …). The authority columns (`*_id`) are optional: filled where the annotator knows them, they serve later as reference for step 5. A reference record also confirms the step 3 segments of the entry (boundaries of entry, copies, fields and items), so the same set serves as hand-checked set for step 3.
+**What a reference record contains.** For one entry (and its copies and prints): every row step 4 should produce, in the same tables and columns as the extraction (`ro_objects`, `ro_dimensions`, `ro_collection_stays`, `ro_auctions`, `ro_object_sources`, …), with the verbatim values as they are in the CRLB text and the list choices (transfer method, collection type, attribution status, …). Where the annotator knows the RKD term or authority of a value, it is recorded as well; it is loaded as a `reference` run of step 5 (`normalised_values`, `cluster_uris`) and serves as reference for that step. Reference rows are anchored to word ranges, not segment ids, so they stay valid when the segmentation is rerun. A reference record also confirms the step 3 segments of the entry (boundaries of entry, copies, fields and items), so the same set serves as hand-checked set for step 3.
 
-**What a reference record follows: the CRLB text, not the RKD record.** RKD records may contain information from other sources, later updates or different interpretations. The reference record encodes what the CRLB text says, because that is what extraction can find. Where the RKD record differs, the difference is noted in the reference record (`review_note`), because it is useful input for step 5 (reconciliation).
+**What a reference record follows: the CRLB text, not the RKD record.** RKD records may contain information from other sources, later updates or different interpretations. The reference record encodes what the CRLB text says, because that is what extraction can find. Where the RKD record differs, the difference is noted in the reference record (`note`), because it is useful input for step 5 (reconciliation).
 
 **Selection.** Per POC volume (XIX (4) and II part 1) about 25 entries, chosen to cover the variation rather than at random:
 
@@ -1118,19 +1200,17 @@ Files are written to `data/entries/<part>/<catalogue number>.md` and `…-displa
 
 ### Code
 
-New directory `scripts/extraction/`:
+Subpackage `crlb.extraction`, schema `04_extraction.sql`:
 
-- `extract_objects.py`, `extract_lists.py` (abbreviation and exhibition lists), `extract_references.py` (literature, exhibitions), `extract_provenance.py`, `extract_texts.py`: each writes one `ro_runs` row and its tables, and prints only counts.
-- `llm.py`: the runtime interface (local server or API), schema-constrained calls, the span and list checks, logging to `ro_llm_calls`.
-- `prompts/`: one prompt and one JSON schema per task.
-- `vocabularies/`: the RO value lists used (Object names, Material_support, Attribution status, Transfer method, Collection Type, Currencies, Inscription Type, Source Types, Artistic relation types) as CSV with label and URI, and the CRLB-to-RO mapping tables.
-- `review_extraction.py`: writes a local review file per entry (the PDF region next to the extracted rows), never to the console.
-- `export_ro.py`: writes RO JSON records from the active runs.
-- `export_markdown.py`: writes the faithful and display Markdown file of each entry from the active runs.
-- `reference/prefill.py`: writes pre-filled reference records (JSON per entry) from the RKD/Axiell export or a rules run, to `data/reference/`.
-- `reference/import_reference.py`: checks hand-made reference records and loads them as a `reference` run.
-- `reference/selection.csv` (in git): the selected entries with their development/test assignment.
-- `compare.py`: compares an extraction run with the reference run per table and property, and writes the metrics (counts only to the console, details to a local file).
+- `crlb extract lists | objects | references | provenance | texts`: each writes one `ro_runs` row and its tables, and prints only counts.
+- `crlb.llm` (core): the runtime interface, schema-constrained calls, the span and list checks, logging to `llm_calls`.
+- `crlb/extraction/prompts/`: one prompt and one JSON schema per task.
+- `crlb/extraction/vocabularies/`: the RO value lists used (Object names, Material_support, Attribution status, Transfer method, Collection Type, Currencies, Inscription Type, Source Types, Artistic relation types) as CSV with label and URI, and the CRLB-to-RO mapping tables.
+- `crlb extract review`: writes a local review file per entry (the PDF region next to the extracted rows) to `data/`, never to the console.
+- `crlb export ro` and `crlb export markdown`: the RO JSON records and the Markdown files of the entries, from the active runs.
+- `crlb reference prefill | import`: pre-filled reference records (JSON per entry, in `data/reference/`) from the RKD/Axiell export or a rules run; checking and loading hand-made records as a `reference` run.
+- `data_manifest/reference_selection.csv` (in git): the selected entries with their development/test assignment.
+- `crlb extract compare`: compares an extraction run with the reference run per table and property, and writes the metrics (counts to the console, details to `data/`).
 
 New dependencies, to be confirmed when the code is written: an HTTP client for the model runtime, and a schema library (for example Pydantic) to define the JSON schemas once and validate answers.
 
@@ -1255,7 +1335,7 @@ For each value of step 4, the normalised value is the value as it would be enter
 
 | Instruction                                                                                                                          | Example                                                                  |
 | :----------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------- |
-| dates as `YYYY`, `YYYY-MM` or `YYYY-MM-DD`; uncertainty in the date remark                                                           | `c. 1598–1600` → begin `1598`, end `1600`, remark                        |
+| dates are already ISO start and end from step 4; 5b adds the uncertainty as date remark                                              | `c. 1598–1600` → remark `circa`                                          |
 | no end date for the current or last known location                                                                                   | —                                                                        |
 | date remarks in the standard wording                                                                                                 | `seen`, `reported`, `date of auction`, `bought at 1783 sale`             |
 | personal names as `Last, First`                                                                                                      | `Duarte Pinto Coelho` → `Pinto Coelho, Duarte`                           |
@@ -1267,7 +1347,7 @@ For each value of step 4, the normalised value is the value as it would be enter
 | remarks on references and auctions in the standard wording                                                                           | `(as Jan van Eyck)` → `as by Jan van Eyck`; `listed as '…'`              |
 | comment fields in American English, telegram style                                                                                   | —                                                                        |
 
-The instructions are kept as a rules file in git (`scripts/enrichment/entry_rules/`), with the section of the RKD manual each rule implements, so the client can check them.
+The instructions are kept as a rules file in git (`src/crlb/enrichment/entry_rules/`), with the section of the RKD manual each rule implements, so the client can check them.
 
 **Specific cases:**
 
@@ -1283,7 +1363,7 @@ CREATE TABLE enrichment_runs (
     part_of_step        TEXT NOT NULL CHECK (part_of_step IN ('5b', '5c', '5d', '5e', '5f')),
     method              TEXT NOT NULL CHECK (method IN ('rules', 'llm', 'gliner', 'manual', 'reference')),
     model               TEXT,
-    extraction_run_ids  TEXT NOT NULL,     -- JSON list of the ro_runs used
+    ro_run_ids          TEXT NOT NULL,     -- JSON list of the ro_runs used
     correction_run_id   INTEGER REFERENCES correction_runs(id),      -- text the mentions were found in (5d)
     segmentation_run_id INTEGER REFERENCES segmentation_runs(id),    -- paragraphs and notes used (5d)
     based_on            TEXT,              -- JSON list of enrichment_runs this run builds on (e.g. 5c on 5b)
@@ -1356,7 +1436,7 @@ CREATE TABLE cluster_uris (
 CREATE INDEX cluster_uris_cluster ON cluster_uris(cluster_id);
 ```
 
-The export of step 4 (`export_ro.py`) takes the normalised values from 5b and fills the `*_id` properties of the RO model from `cluster_uris`, choosing per property the vocabulary the RO model prescribes, for rows with a status other than `rejected`.
+The export of step 4 (`crlb export ro`) takes the normalised values from 5b and fills the `*_id` properties of the RO model from `cluster_uris`, choosing per property the vocabulary the RO model prescribes, for rows with a status other than `rejected`.
 
 ### 5d: named entities in the descriptive texts
 
@@ -1451,7 +1531,7 @@ The RKD links in the PDFs, together with the segments of step 3, make two produc
 
 Rules:
 
-- The original PDFs are never changed. The linked copies are new files (`data/linked/<part>/…_links.pdf`), stored with their own hash in `pdfs.sqlite`, and recorded as derived from the original.
+- The original PDFs are never changed. The linked copies are new files (`data/linked/<part>/…_links.pdf`), stored with their own hash in `pdfs.sqlite` and registered as `documents` with `derived_from` set to the original, so `open_pdf` can open and check them. Their text is not extracted again.
 - The existing link conventions are followed: the URI pattern of the most recent `_links` files (`https://rkd.nl/images/<id>`), one link per main number.
 - Before adding links, the existing link annotations of a PDF are checked, so no duplicates are made.
 
@@ -1500,19 +1580,17 @@ Thresholds per part are set by the user beforehand, as in steps 2 and 4.
 
 ### Code
 
-New directory `scripts/enrichment/`:
+Subpackage `crlb.enrichment`, schema `05_enrichment.sql`:
 
-- `fetch_control_lists.py`: fetches and caches the RKD lists and records (5a) and the LOD vocabulary subsets (5c) into `control_terms` and `rkd_records`; prints only counts.
-- `parse_indexes.py`: turns the index segments of step 3 into `control_terms` and `index_references` (5a).
-- `normalise.py`: matching to control lists, clusters and the entry-instruction rules (5b).
-- `entry_rules/`: the entry instructions as rules, each with a reference to the section of the RKD manual.
-- `enrich.py`: LOD URIs for clusters and list values (5c).
-- `ner.py`: gazetteer matching, compact model and LLM fallback on the descriptive texts, roles and `ro_subjects` (5d), using `llm.py` from step 4.
-- `compare_rkd.py`: the comparison with RKD (5e), with a local report file.
-- `request_terms.py`: the list of missing terms in the RKD request format.
-- `rkd_references.py`: the CRLB reference per RKD record (5f), as CSV and JSON.
-- `add_links.py`: the PDF copies with embedded RKD links for the main entries (5f).
-- `review_enrichment.py`: a local review file with the value, its context in the PDF, the candidates and the URIs.
+- `crlb lists fetch`: fetches and caches the RKD lists and records (5a) and the LOD vocabulary subsets (5c) into `control_terms` and `rkd_records`; prints only counts.
+- `crlb lists indexes`: turns the index segments of step 3 into `control_terms` and `index_references` (5a).
+- `crlb normalise`: matching to control lists, clusters and the entry-instruction rules (5b); `crlb/enrichment/entry_rules/` holds the entry instructions, each with a reference to the section of the RKD manual.
+- `crlb normalise request-terms`: the list of missing terms in the RKD request format.
+- `crlb enrich`: LOD URIs for clusters and list values (5c).
+- `crlb ner`: gazetteer matching, compact model and LLM fallback on the descriptive texts, roles and `ro_subjects` (5d), using `crlb.llm`.
+- `crlb compare-rkd`: the comparison with RKD (5e), with a report file in `data/`.
+- `crlb export rkd-references` and `crlb add-links`: the CRLB reference per RKD record, and the PDF copies with embedded RKD links (5f).
+- `crlb enrich review`: a local review file with the value, its context in the PDF, the candidates and the URIs.
 
 New dependencies, to be confirmed when the code is written: a SPARQL or HTTP client for the external lists (rapidfuzz, for fuzzy matching, is already a dependency), and a compact NER model (GLiNER) if 5d needs it. Every model used is added to `README.md` under AI usage.
 
@@ -1547,6 +1625,7 @@ New dependencies, to be confirmed when the code is written: a SPARQL or HTTP cli
 - Licences and terms of use of the external lists when cached and redistributed (Iconclass, Getty, RKD).
 - Whether new terms should be requested from the RKD thesaurus, or Rubens Online keeps its own list.
 - Whether the normalised values should follow the RKD entry instructions in every case, or Rubens Online has its own conventions for some fields (for example names as `First Last` for display).
+
 ## Earlier work
 
 Work done before this project that the plan builds on or compares with:
@@ -1563,7 +1642,7 @@ The offer commits to sharing the scripts and the knowledge built in this work pa
 - **Open licence.** The repository is published on GitHub under the MIT licence (`LICENSE`, copyright Datable). The licence covers the code and the documentation in the repository. It does not cover the CRLB content: PDFs, extracted text, reference records and exports stay in `data/`, outside git.
 - **Language.** Everything in the repository is in English: code, comments, documentation, commit messages and the plan. This was agreed with the client.
 - **Documentation** of the procedures, the scripts and the architecture:
-    - `README.md`: what the project does, how to install and run it (`uv`, `make` targets), and the AI tools and models used in development and production;
+    - `README.md`: what the project does, how to install and run it (`uv sync`, the `crlb` command, `make` targets), the external tools and models with their versions, and the AI tools and models used in development and production;
     - `doc/plan.md` (this plan), `doc/OCR.md`, `doc/NER.md` and per step a short description of what was actually built and measured, kept up to date with the code;
     - the annotation guide for the reference records (step 4) and the entry-instruction rules (step 5b), which are written for domain experts;
     - docstrings and tests in the code, so each step can be understood and rerun on its own.
@@ -1572,7 +1651,7 @@ The offer commits to sharing the scripts and the knowledge built in this work pa
 
 ## Review and corrections (all steps)
 
-Every layer from step 2 on has a `status` column (`unreviewed`, `accepted`, `corrected`, `rejected`), and the rows of a layer are never changed after their run. A reviewer's decision, including a corrected value, is therefore stored separately, as an event:
+Every table from step 2 on that holds results has a `status` column (`unreviewed`, `accepted`, `corrected`, `rejected`): `corrected_words`, `segments`, `printed_pages`, `note_refs`, the `ro_*` tables, and the step 5 tables. The rows of a run are never changed after the run. A reviewer's decision, including a corrected value, is therefore stored separately, as an event:
 
 ```sql
 -- One row per review decision, for any table with a status column.
@@ -1595,16 +1674,16 @@ Rules:
 
 - The `status` of a row follows from its latest review (`accept` → `accepted`, `correct` → `corrected`, `reject` → `rejected`); rows without a review are `unreviewed`. The review scripts and the validation tool write a review and update the `status` in the same transaction, so `status` stays a quick filter.
 - Exports and later steps use the **effective value**: the `new_value` of the latest `correct` review of that column, or otherwise the value in the row.
-- A rerun of a step produces new rows in a new run. Reviews of the old run are carried over to the new run where the row is unchanged (same source range, same values); the others are listed for review again.
+- A rerun of a step produces new rows in a new run. Reviews of the old run are carried over to the new run where the row is unchanged (same word range, same values); the others are listed for review again.
 - Review decisions are the most expensive data in the project. `crlb.sqlite` is backed up before every run and every import, and `reviews` can be exported to a file on its own.
 
 ## Volumes without a PDF
 
 Eleven volumes exist only as Word files: I, VII, VIII, X, XIII (1), XV, XVI, XXII (1), XXIV, XXVI (1) and XXVI (2.3). Four of them also have original scans (XV, XXII (1), XXVI (1), XXVI (2.3); VI and XIII (3) have scans as well but already have a PDF). There is no decision yet; the options are:
 
-1. Import the Word text into the same tables, one `pages` row per Word section, without `words` coordinates and with `text_source = 'docx'`. Fast, but nothing to validate against and an unknown OCR quality.
-2. OCR the scans where they exist (this gives text with coordinates, comparable to the PDFs), and use the Word files only for the volumes without scans.
-3. Leave them out of the POC.
+1. Import the Word text. Fast, but there is nothing to validate it against and its OCR quality is unknown. It also needs schema changes: a `text_source` value `docx`, words without coordinates, and documents without a PDF in `pdfs.sqlite`; every later step works on word ids and coordinates, so this has to be designed carefully.
+2. OCR the scans where they exist (this gives text with coordinates, comparable to the PDFs). Redoing OCR is not planned for now, so this option is deferred.
+3. Leave them out for now.
 
 Before choosing, measure the quality of the Word text on a few pages that also exist as ABBYY PDF (for example `Boekdeel_II_I.docx` against `CRLB_02_1_links`, both 416 pages), with the same method as the OCR quality test.
 
