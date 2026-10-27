@@ -444,7 +444,7 @@ CREATE TABLE correction_flags (
 -- each be run several times; older runs stay in the database for comparison.
 CREATE TABLE active_runs (
     step     TEXT PRIMARY KEY,      -- '2' (correction), '3' (segmentation), '4:<field>' (extraction),
-                                    -- '5b' (linking), '5c' (named entities), '5d' (RKD comparison)
+                                    -- '5b' (normalisation), '5c' (enrichment), '5d' (named entities), '5e' (RKD comparison)
     run_id   INTEGER NOT NULL,      -- id in the run table of that step
     set_at   TEXT NOT NULL,         -- ISO 8601, UTC
     note     TEXT                   -- why this run was made active
@@ -1128,56 +1128,58 @@ New dependencies, to be confirmed when the code is written: an HTTP client for t
 - How private owners named in the CRLB provenance are handled in an export, given the RKD rule that protected private collections are not shown publicly.
 - Who at the Rubenshuis makes the reference records, and how much time is available for them.
 
-## Step 5: normalisation, linking and enrichment
+## Step 5: normalisation, enrichment and comparison
 
 ### Goal
 
-Make the verbatim values of step 4 usable in Rubens Online or RKDimages: normalise them according to control lists and entry instructions, link them to authorities with a URI (linked open data), find named entities in the descriptive texts, and compare the result with what is already in RKD/Axiell, so that only what is missing or different is added. This covers the following parts of the offer:
+Make the verbatim values of step 4 usable in Rubens Online or RKDimages, following the components of the offer:
 
-- "Op basis van beschikbare data in RKD/Axiell en registers uit de corpusdelen worden controlelijsten gemaakt";
-- "Component voor het normaliseren van geëxtraheerde gegevens op basis van controlelijsten en invoerinstructies";
-- "Component voor het verrijken van geëxtraheerde gegevens met een LOD URI";
-- "Op beschrijvende teksten wordt een verrijking uitgevoerd": named entities (for example mythological figures, place names) linked to the authorities of the data profile (for example Iconclass), using the indexes of the corpus;
-- from the kick-off: "wat zit er al in de databank, en enkel het ontbrekende vullen we aan".
+| Part | Offer                                                                                                                                                                                                                 | In short                                                                   |
+| :--- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------- |
+| 5a   | "Op basis van beschikbare data in RKD/Axiell en registers uit de corpusdelen worden controlelijsten gemaakt"                                                                                                          | control lists: the accepted values, from RKD/Axiell and the corpus indexes |
+| 5b   | "Component voor het normaliseren van geëxtraheerde gegevens op basis van controlelijsten en invoerinstructies"                                                                                                        | normalisation: each verbatim value to the value RKD would enter            |
+| 5c   | "Component voor het verrijken van geëxtraheerde gegevens met een LOD URI"                                                                                                                                             | enrichment: URIs from linked open data vocabularies                        |
+| 5d   | "Op beschrijvende teksten wordt een verrijking uitgevoerd … named entities … gekoppeld aan … authorities (bijvoorbeeld Iconclass). Voor entity recognition kan gebruik worden gemaakt van de indexen van het Corpus." | named entities in the descriptive texts                                    |
+| 5e   | kick-off: "wat zit er al in de databank, en enkel het ontbrekende vullen we aan"                                                                                                                                      | comparison with the existing RKD/Axiell records                            |
 
-Step 5 never changes the step 4 rows. Its results are a separate layer of links and clusters that refer to them, with the same traceability (run, method, status) as the earlier steps.
+This follows the architecture in the offer, where "data normalisatie" (with the control lists) and "data verrijking" (with the LOD vocabularies) are separate components. The distinction:
 
-### Parts
+- **Normalisation (5b)** answers: _how would this value be entered in RKD?_ It uses local control lists (the RKD validation lists, the corpus indexes) and the RKD entry instructions (the [RKD manual](<project/Handleiding_RKDdatabases (15).pdf>), "Invoer RKD" in the project notes). Its result is a normalised value or a term of a control list.
+- **Enrichment (5c)** answers: _which URI in a linked open data vocabulary does this value correspond to?_ It uses Getty AAT and TGN, Iconclass, Wikidata and the URIs of the RKD databases themselves.
 
-1. **5a, control lists:** gather the terms values can be linked to, from authorities, RKD/Axiell and the corpus indexes.
-2. **5b, linking:** link each value of step 4 to a term of a control list, and group values that denote the same thing.
-3. **5c, named entities in the descriptive texts:** find, classify and link entities in the paragraphs and notes.
-4. **5d, comparison with RKD/Axiell:** per work, what the CRLB adds to the existing record, and where they differ.
+Step 5 never changes the step 4 rows. Its results are separate layers that refer to them, with the same traceability (run, method, status) as the earlier steps.
 
 ### 5a: control lists
 
-| Kind                   | Source                                                                | Used for                                                                  |
-| :--------------------- | :-------------------------------------------------------------------- | :------------------------------------------------------------------------ |
-| artists                | RKDartists                                                            | attribution, makers of copies and prints, artists in texts                |
-| collections and owners | RKD validation list of collections (RKDimages _Herkomst 1_)           | holders, current locations                                                |
-| auctions               | RKD auction file (barcode, place, auction house, dates)               | provenance auctions                                                       |
-| exhibitions            | RKD exhibitions validation list                                       | exhibitions                                                               |
-| literature             | RKD citation abbreviations (RKDlibrary), Rubenianum library (Brocade) | literature references, abbreviation lists                                 |
-| places                 | Getty TGN                                                             | places of collections, auctions, exhibitions, production; places in texts |
-| concepts               | Getty AAT, and the RO value lists                                     | object names, support, materials, techniques, transfer methods            |
-| subjects               | Iconclass                                                             | depicted subjects, mythological and biblical figures in texts             |
-| general                | Wikidata                                                              | persons and places not in the above                                       |
-| corpus indexes         | the index documents and index sections of each part                   | names, places, collections and subjects with the pages where they occur   |
+Control lists are the lists of accepted values that extracted values are normalised to. They are built from:
+
+| List                   | Source                                                                                                                  | Used for                                                                |
+| :--------------------- | :---------------------------------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------- |
+| artists                | RKDartists (names as validated in RKD)                                                                                  | attribution, makers of copies and prints                                |
+| collections and owners | RKD validation list of collections (RKDimages _Herkomst 1_)                                                             | holders, current locations                                              |
+| auctions               | RKD auction file (barcode, place, auction house, dates)                                                                 | provenance auctions                                                     |
+| exhibitions            | RKD exhibitions validation list                                                                                         | exhibitions                                                             |
+| literature             | RKD citation abbreviations (RKDlibrary), Rubenianum library (Brocade)                                                   | literature references, abbreviation lists                               |
+| geographic terms       | RKD geographic terms                                                                                                    | places of collections, auctions, exhibitions, production                |
+| RO value lists         | the RO data model (Object names, Material_support, Attribution status, Transfer method, Collection Type, Currencies, …) | the list choices of step 4                                              |
+| corpus indexes         | the index documents and index sections of each part                                                                     | names, places, collections and subjects with the pages where they occur |
+| existing records       | the RKDimages records of the CRLB works (`rkd_records`)                                                                 | the values already used for these works, and the comparison in 5e       |
 
 Notes:
 
-- **The corpus indexes** are the most valuable list for this corpus: they are compiled by the authors, use the spellings of the text, and say on which (printed) pages each name occurs. They need their own segmentation in step 3 (index entries, sub-entries, page references; the index layout of each part goes into its configuration) and parsing into terms with page references here.
-- **External lists are cached locally** in the database, with their source and date of retrieval, and matching happens locally. This keeps runs reproducible, and avoids sending names from the text (including private owners) to outside services one by one. Where a service offers downloads or bulk queries (Getty and Wikidata SPARQL endpoints, Iconclass data), those are used to fetch relevant subsets (for example all TGN places in Europe, all RKDartists active 1550–1750).
-- **RKD data** comes either from an export of RKD/Axiell provided by the Rubenshuis or RKD, or from the RKD's public interfaces, whichever is available; to be agreed.
+- **The corpus indexes** are the most valuable list for this corpus: they are compiled by the authors, use the spellings of the text, and say on which (printed) pages each name occurs. They are segmented in step 3 (rule 10: index entries, sub-entries, page references) and parsed here into terms with page references.
+- **RKD data** comes either from an export of RKD/Axiell provided by the Rubenshuis or RKD, or from the RKD's public interfaces, whichever is available; to be agreed. It is stored locally with its source and date, so runs are reproducible.
+- **Effort:** the offer reserves 3 person-days for creating the control lists ("Creëren controlelijsten").
 
 ```sql
--- One row per term of a control list.
+-- One row per term of a control list (5a) or of a LOD vocabulary (5c).
 CREATE TABLE control_terms (
     id            INTEGER PRIMARY KEY,
-    vocabulary    TEXT NOT NULL,     -- 'rkdartists', 'rkd_collections', 'rkd_auctions', 'rkd_exhibitions',
-                                     -- 'rkd_citations', 'tgn', 'aat', 'iconclass', 'wikidata', 'crlb_index'
-    uri           TEXT,              -- NULL for corpus index terms without an authority
-    label         TEXT NOT NULL,     -- preferred label
+    vocabulary    TEXT NOT NULL,     -- 5a: 'rkdartists', 'rkd_collections', 'rkd_auctions', 'rkd_exhibitions',
+                                     --     'rkd_citations', 'rkd_places', 'ro_lists', 'crlb_index'
+                                     -- 5c: 'tgn', 'aat', 'iconclass', 'wikidata'
+    uri           TEXT,              -- NULL for corpus index terms and list values without a URI
+    label         TEXT NOT NULL,     -- preferred label, as entered in RKD for RKD lists
     alt_labels    TEXT,              -- JSON list of variant names and spellings
     type          TEXT,              -- person, collection, place, concept, subject, auction, exhibition, source
     extra         TEXT,              -- JSON: dates of life or activity, coordinates, broader terms, place of a collection, ...
@@ -1205,35 +1207,55 @@ CREATE TABLE rkd_records (
 );
 ```
 
-`rkd_records` is used twice: to pre-fill the reference records of step 4, and for the comparison in 5d. It is filled once per export and replaced as a whole when a newer export arrives.
+`rkd_records` is used twice: to pre-fill the reference records of step 4, and for the comparison in 5e. It is filled once per export and replaced as a whole when a newer export arrives.
 
-### 5b: linking
+### 5b: normalisation
 
-For each value of step 4 that should point to an authority (holder, place, artist, auction, exhibition, abbreviation, object name, support, …):
+For each value of step 4, the normalised value is the value as it would be entered in RKD: a term of a control list where the field is a validation field in RKD, or a value formatted according to the entry instructions where it is free text.
 
-1. **Candidates** from the relevant control lists: exact match on label or variant after normalisation (case, accents, punctuation, word order `Last, First` against `First Last`, OCR-tolerant comparison for OCR volumes), then fuzzy matching.
-2. **Filters and scores** from the context: dates of life against the date of the provenance stage, the place of a collection against the place in the text, the auction house and date for an auction, the corpus index of the same part (a holder listed in the index of the part is strong evidence).
-3. **Decision:** a link is made automatically only if there is one candidate above the threshold and no close second. Otherwise the candidates are stored for review. An LLM may be used as a judge to choose between the candidates or decide "none of these", under the same constraint as in step 4: it can only return one of the given candidates.
-4. **Clusters:** values that denote the same thing across entries and parts ("Duarte Pinto Coehlo", "D. Pinto Coelho") are grouped, with or without an authority. A cluster is linked once, and the link applies to all its values. If Rubens Online gets its own records for collections, agents and auctions, the clusters are the starting point for them; if it links to RKD, a cluster without an RKD term is a candidate for a new RKD term.
+**Matching to a control list** (holder, artist, auction, exhibition, abbreviation, place):
 
-Specific cases:
+1. **Candidates** from the relevant list: exact match on label or variant after simplification (case, accents, punctuation, word order `Last, First` against `First Last`, OCR-tolerant comparison for OCR volumes), then fuzzy matching.
+2. **Filters and scores** from the context: dates of life against the date of the provenance stage, the place of a collection against the place in the text, the auction house and date for an auction, the corpus index of the same part (a holder listed in the index of the part is strong evidence), the values already in the RKD record of the same work.
+3. **Decision:** a term is assigned automatically only if there is one candidate above the threshold and no close second. Otherwise the candidates are stored for review. An LLM may be used as a judge to choose between the candidates or decide "none of these", under the same constraint as in step 4: it can only return one of the given candidates.
+4. **Clusters:** values that denote the same thing across entries and parts ("Duarte Pinto Coehlo", "D. Pinto Coelho") are grouped, with or without a term. A cluster is normalised once, and the result applies to all its values. If Rubens Online gets its own records for collections, agents and auctions, the clusters are the starting point for them; if it links to RKD, a cluster without an RKD term is a candidate for a new RKD term.
 
-- **Literature:** the link is made per abbreviation of the abbreviation list (a few hundred per part), not per reference: `Jaffé, Catalogo, 1989` → RKD citation abbreviation `Jaffé 1989` and/or the Rubenianum library record. Every reference using that abbreviation inherits the link. This is a small, semi-manual task: automatic candidates, confirmed by a person.
-- **Auctions:** step 4 rows of different objects that describe the same sale (same auction house, place and date) are merged into one sale, and linked to the RKD auction file.
-- **Exhibitions:** an abbreviation with several venues (`Liverpool – London, 1998–99`) is split into one exhibition per venue, as RKD requires, and linked.
-- **Normalisation** follows the RKD entry instructions where a value is written out rather than linked: names as `Last, First`, unnamed owners as _Private collection_, unnamed dealers as _Art dealer_, amounts and currencies as in the RKD manual.
-- **Missing terms:** values with no term in RKD are collected in a request list in the format of the RKD manual (_Bijlage 2: Termen aanvragen voor validatielijsten_), so the Rubenshuis can request them from the RKD thesaurus instead of entering them one by one.
+**Entry instructions** (RKD manual), applied by rules where a value is written out rather than taken from a list:
+
+| Instruction                                                                                                                          | Example                                                                  |
+| :----------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------- |
+| dates as `YYYY`, `YYYY-MM` or `YYYY-MM-DD`; uncertainty in the date remark                                                           | `c. 1598–1600` → begin `1598`, end `1600`, remark                        |
+| no end date for the current or last known location                                                                                   | —                                                                        |
+| date remarks in the standard wording                                                                                                 | `seen`, `reported`, `date of auction`, `bought at 1783 sale`             |
+| personal names as `Last, First`                                                                                                      | `Duarte Pinto Coelho` → `Pinto Coelho, Duarte`                           |
+| unnamed owners and dealers                                                                                                           | _Private collection_, _Art dealer_; no provenance: _Whereabouts unknown_ |
+| amounts without thousands separators or currency; pounds, shillings and pence as `3.4.2` with currency `Lsd`; currency from the list | `£3 4s 2d` → `3.4.2`, `Lsd`                                              |
+| inventory numbers in the institution's spelling, without `Inv. no.`                                                                  | `Inv. no. 2258` → `2258`                                                 |
+| lot number only, without `lot`                                                                                                       | `lot 550` → `550`                                                        |
+| one exhibition per venue for travelling exhibitions                                                                                  | `Liverpool – London, 1998–99` → two exhibitions                          |
+| remarks on references and auctions in the standard wording                                                                           | `(as Jan van Eyck)` → `as by Jan van Eyck`; `listed as '…'`              |
+| comment fields in American English, telegram style                                                                                   | —                                                                        |
+
+The instructions are kept as a rules file in git (`scripts/enrichment/entry_rules/`), with the section of the RKD manual each rule implements, so the client can check them.
+
+**Specific cases:**
+
+- **Literature:** normalised per abbreviation of the abbreviation list (a few hundred per part), not per reference: `Jaffé, Catalogo, 1989` → RKD citation abbreviation `Jaffé 1989`; the page reference to the RKD form (`p. 22-24, no. 6a, ill.`). Every reference using that abbreviation inherits the result. This is a small, semi-manual task: automatic candidates, confirmed by a person.
+- **Auctions:** step 4 rows of different objects that describe the same sale (same auction house, place and date) are merged into one sale, and matched to the RKD auction file.
+- **Missing terms:** values with no term in an RKD list are collected in a request list in the format of the RKD manual (_Bijlage 2: Termen aanvragen voor validatielijsten_), so the Rubenshuis can request them from the RKD thesaurus instead of entering them one by one.
 
 ```sql
-CREATE TABLE link_runs (
+-- One row per run of 5b, 5c, 5d or 5e.
+CREATE TABLE enrichment_runs (
     id                  INTEGER PRIMARY KEY,
     started_at          TEXT NOT NULL,
-    part_of_step        TEXT NOT NULL,     -- '5b', '5c', '5d'
+    part_of_step        TEXT NOT NULL CHECK (part_of_step IN ('5b', '5c', '5d', '5e')),
     method              TEXT NOT NULL CHECK (method IN ('rules', 'llm', 'gliner', 'manual', 'reference')),
     model               TEXT,
     extraction_run_ids  TEXT NOT NULL,     -- JSON list of the ro_runs used
-    correction_run_id   INTEGER REFERENCES correction_runs(id),      -- text the mentions were found in (5c)
-    segmentation_run_id INTEGER REFERENCES segmentation_runs(id),    -- paragraphs and notes used (5c)
+    correction_run_id   INTEGER REFERENCES correction_runs(id),      -- text the mentions were found in (5d)
+    segmentation_run_id INTEGER REFERENCES segmentation_runs(id),    -- paragraphs and notes used (5d)
+    based_on            TEXT,              -- JSON list of enrichment_runs this run builds on (e.g. 5c on 5b)
     version             TEXT NOT NULL,
     options             TEXT NOT NULL
 );
@@ -1241,43 +1263,80 @@ CREATE TABLE link_runs (
 -- A group of values (or entity mentions) that denote the same thing.
 CREATE TABLE clusters (
     id           INTEGER PRIMARY KEY,
-    run_id       INTEGER NOT NULL REFERENCES link_runs(id),
+    run_id       INTEGER NOT NULL REFERENCES enrichment_runs(id),
     type         TEXT NOT NULL,          -- person, collection, place, auction, exhibition, source, subject, ...
-    label        TEXT NOT NULL,          -- preferred form, from the authority or the most frequent value
-    term_id      INTEGER REFERENCES control_terms(id),  -- NULL = no authority found
+    label        TEXT NOT NULL,          -- normalised form: the control-list term, or formatted per the entry instructions
+    term_id      INTEGER REFERENCES control_terms(id),  -- the control-list term (5a lists); NULL = none found
     status       TEXT NOT NULL DEFAULT 'unreviewed'
 );
 
--- One row per linked value: which step 4 value, which cluster, how decided.
-CREATE TABLE value_links (
-    id            INTEGER PRIMARY KEY,
-    run_id        INTEGER NOT NULL REFERENCES link_runs(id),
-    table_name    TEXT NOT NULL,         -- e.g. 'ro_collection_stays'
-    row_id        INTEGER NOT NULL,
-    column_name   TEXT NOT NULL,         -- e.g. 'holder_text'
-    value_text    TEXT NOT NULL,         -- the verbatim value
-    cluster_id    INTEGER REFERENCES clusters(id),
-    score         REAL,
-    candidates    TEXT,                  -- JSON: candidate term ids with scores, for review
-    rule          TEXT NOT NULL,
-    status        TEXT NOT NULL DEFAULT 'unreviewed'
+-- One row per normalised value of step 4.
+CREATE TABLE normalised_values (
+    id                INTEGER PRIMARY KEY,
+    run_id            INTEGER NOT NULL REFERENCES enrichment_runs(id),
+    table_name        TEXT NOT NULL,         -- e.g. 'ro_collection_stays'
+    row_id            INTEGER NOT NULL,
+    column_name       TEXT NOT NULL,         -- e.g. 'holder_text'
+    value_text        TEXT NOT NULL,         -- the verbatim value
+    normalised_value  TEXT,                  -- as it would be entered in RKD
+    cluster_id        INTEGER REFERENCES clusters(id),  -- for values matched to a control list
+    rule              TEXT NOT NULL,         -- matching rule or entry instruction applied
+    score             REAL,
+    candidates        TEXT,                  -- JSON: candidate term ids with scores, for review
+    status            TEXT NOT NULL DEFAULT 'unreviewed'
 );
-CREATE INDEX value_links_row ON value_links(table_name, row_id);
+CREATE INDEX normalised_values_row ON normalised_values(table_name, row_id);
 ```
 
-The export of step 4 (`export_ro.py`) fills the `*_id` properties of the RO model from these links (through the cluster's term), for links with a status other than `rejected`.
+### 5c: enrichment with LOD URIs
 
-### 5c: named entities in the descriptive texts
+Each cluster and each list value gets the URIs that identify it in linked open data vocabularies, as the RO model asks for in its `*_id` properties:
 
-Approach as described in [NER.md](NER.md): structure first, then extraction with spans, then linking.
+| What                                                                                          | Vocabulary (per the RO model)                               |
+| :-------------------------------------------------------------------------------------------- | :---------------------------------------------------------- |
+| artists, persons                                                                              | RKDartists URI; Wikidata as a second identifier             |
+| works                                                                                         | RKDimages URI (from the RKD links in the PDFs)              |
+| places                                                                                        | Getty TGN                                                   |
+| object names, materials, supports, techniques, transfer methods, collection types, currencies | Getty AAT (most RO value lists already carry the AAT URI)   |
+| depicted subjects, mythological and biblical figures, events                                  | Iconclass; Wikidata for persons and events not in Iconclass |
+| literature                                                                                    | Rubenianum library (Brocade) record, RKDlibrary             |
 
-- **Scope:** the paragraphs and notes of step 4 (`ro_text_paragraphs`, `ro_text_notes`). The structured fields are already covered by steps 4 and 5b.
+How:
+
+1. **Through the control list first.** An RKD term often already carries a URI, or a link to Wikidata, ULAN or TGN; an RO list value carries its AAT URI. These are taken over directly.
+2. **Otherwise by matching** against a local copy of the vocabulary, with the same candidate, score and decision procedure as in 5b (with type and dates as filters: a place must be a TGN place, a person's dates must fit).
+3. **Local copies:** external vocabularies are fetched in bulk (Getty and Wikidata SPARQL endpoints, Iconclass data downloads), limited to relevant subsets (for example TGN places in Europe, RKDartists active 1550–1750), and stored in `control_terms` with their source and date. Matching happens locally. This keeps runs reproducible and avoids sending names from the text (including private owners) to outside services one by one.
+
+```sql
+-- LOD URIs of a cluster (a cluster can have several: RKDartists and Wikidata, TGN and RKD places).
+CREATE TABLE cluster_uris (
+    id           INTEGER PRIMARY KEY,
+    run_id       INTEGER NOT NULL REFERENCES enrichment_runs(id),
+    cluster_id   INTEGER NOT NULL REFERENCES clusters(id),
+    vocabulary   TEXT NOT NULL,          -- 'rkdartists', 'rkdimages', 'tgn', 'aat', 'iconclass', 'wikidata', ...
+    uri          TEXT NOT NULL,
+    term_id      INTEGER REFERENCES control_terms(id),
+    rule         TEXT NOT NULL,          -- 'from control list', 'matched', 'manual'
+    score        REAL,
+    candidates   TEXT,                   -- JSON, for review
+    status       TEXT NOT NULL DEFAULT 'unreviewed'
+);
+CREATE INDEX cluster_uris_cluster ON cluster_uris(cluster_id);
+```
+
+The export of step 4 (`export_ro.py`) takes the normalised values from 5b and fills the `*_id` properties of the RO model from `cluster_uris`, choosing per property the vocabulary the RO model prescribes, for rows with a status other than `rejected`.
+
+### 5d: named entities in the descriptive texts
+
+Approach as described in [NER.md](NER.md): structure first, then extraction with spans, then normalisation and enrichment of the entities through 5b and 5c.
+
+- **Scope:** the paragraphs and notes of step 4 (`ro_text_paragraphs`, `ro_text_notes`). The structured fields are already covered by steps 4, 5b and 5c.
 - **Entity types:** persons (artists, owners, historical and mythological figures), works (titles and cross-references such as `No. 15`), collections and institutions, places, dates, literature references (already resolved through the abbreviation lists), iconographic subjects.
 - **Order of methods**, as in the earlier steps:
     1. **Gazetteer matching** with the control lists, above all the corpus index of the same part: a name from the index found on a page the index refers to is almost certainly a correct mention. Cross-references (`No. 15`, `Fig. 58`) and literature abbreviations by rules.
     2. **A compact local model** (GLiNER or similar, runs on CPU) for the remaining mentions, with the entity types as labels.
     3. **An LLM** only where 1 and 2 fall short, returning spans that are verified against the text.
-- **Linking** of the mentions through 5b (same clusters and control lists), with Iconclass for subjects and mythological and biblical figures.
+- **Clusters and URIs:** mentions are grouped into the same clusters as the structured values (5b), and get their URIs through those clusters (5c), with Iconclass for subjects and mythological and biblical figures.
 - **Role.** The same kind of entity plays different roles: in the text of a _Diana and Callisto_, "Diana" is a depicted subject, "Burchard" a scholar being cited, "Amalia van Solms" an owner, "Wildens" an artist working on the picture. Each mention gets a role relative to the work the text is about. The role is decided by rules where the context is clear (the title of the work, a provenance-like sentence, a literature reference) and otherwise by the model, as a choice from the list of roles.
 - **Targets.** A mention points to a cluster (persons, places, collections, subjects), to another work (cross-references such as `No. 15` → `ro_objects`) or to a source (a literature reference in the text → `ro_text_resources`).
 - **Aboutness.** Mentions with the role "depicted" (and the title of the work) are the evidence for the RO aboutness properties of the work: `represented_person`, `represented_place`, `represented_event`, `represented_type` and `subject`. These are recorded per work in `ro_subjects`, each with the mentions it is based on, and exported with the work.
@@ -1285,7 +1344,7 @@ Approach as described in [NER.md](NER.md): structure first, then extraction with
 ```sql
 CREATE TABLE entity_mentions (
     id                INTEGER PRIMARY KEY,
-    run_id            INTEGER NOT NULL REFERENCES link_runs(id),
+    run_id            INTEGER NOT NULL REFERENCES enrichment_runs(id),
     segment_id        INTEGER NOT NULL REFERENCES segments(id),   -- paragraph or note
     first_word_id     INTEGER NOT NULL REFERENCES words(id),
     last_word_id      INTEGER NOT NULL REFERENCES words(id),
@@ -1308,11 +1367,11 @@ CREATE INDEX entity_mentions_object ON entity_mentions(object_id);
 -- RO aboutness of a work, derived from 'depicted' mentions and the title.
 CREATE TABLE ro_subjects (
     id           INTEGER PRIMARY KEY,
-    run_id       INTEGER NOT NULL REFERENCES link_runs(id),
+    run_id       INTEGER NOT NULL REFERENCES enrichment_runs(id),
     object_id    INTEGER NOT NULL REFERENCES ro_objects(id),
     property     TEXT NOT NULL CHECK (property IN ('represented_person', 'represented_place',
                                                    'represented_event', 'represented_type', 'subject')),
-    cluster_id   INTEGER REFERENCES clusters(id),   -- through its term: Iconclass, RKDartists, TGN, Wikidata, AAT
+    cluster_id   INTEGER REFERENCES clusters(id),   -- its URIs (Iconclass, RKDartists, TGN, Wikidata, AAT) via cluster_uris
     label        TEXT NOT NULL,
     evidence     TEXT NOT NULL,                     -- JSON: entity_mentions ids, and 'title' if taken from the title
     status       TEXT NOT NULL DEFAULT 'unreviewed'
@@ -1322,25 +1381,27 @@ CREATE INDEX ro_subjects_object ON ro_subjects(object_id);
 
 Because mentions point to word ids, the validation tool can highlight them on the page, as for the OCR and the extracted fields. At most one of `cluster_id`, `target_object_id` and `target_source_id` is set per mention; none is set when the mention is found but not (yet) linked.
 
-### 5d: comparison with RKD/Axiell
+### 5e: comparison with RKD/Axiell
 
-For each work with an RKD ID (from the RKD links in the PDFs, step 4 `ro_object_identifiers`), the step 4/5 data is compared with the existing RKDimages record, per property:
+For each work with an RKD ID (from the RKD links in the PDFs, step 4 `ro_object_identifiers`), the normalised data is compared with the existing RKDimages record (`rkd_records`), per property:
 
 - **same:** present in both and equal after normalisation;
 - **only in CRLB:** a candidate addition to RKD/Rubens Online;
 - **only in RKD:** information from other sources or later updates; kept, not touched;
 - **different:** both present but different (another date, another order of provenance, another attribution); for review by the Rubenshuis.
 
+Because 5b normalises to the RKD lists and entry instructions, most comparisons are exact comparisons of terms and formatted values, not of free text.
+
 Works without an RKD ID are matched to RKD records through title, collection, inventory number and dimensions, as candidates for review; unmatched works are candidates for new records.
 
 ```sql
 CREATE TABLE rkd_comparison (
     id             INTEGER PRIMARY KEY,
-    run_id         INTEGER NOT NULL REFERENCES link_runs(id),
+    run_id         INTEGER NOT NULL REFERENCES enrichment_runs(id),
     object_id      INTEGER NOT NULL REFERENCES ro_objects(id),
     rkd_id         TEXT,                -- NULL = no RKD record matched
     property       TEXT NOT NULL,       -- RO property or group, e.g. 'provenance', 'exhibition_id'
-    crlb_value     TEXT,                -- JSON
+    crlb_value     TEXT,                -- JSON, normalised
     rkd_value      TEXT,                -- JSON
     verdict        TEXT NOT NULL CHECK (verdict IN ('same', 'only_crlb', 'only_rkd', 'different')),
     status         TEXT NOT NULL DEFAULT 'unreviewed'
@@ -1351,8 +1412,9 @@ The result is a report per part and per work: what can be added, and what needs 
 
 ### Measurement
 
-- **Linking:** precision and recall of links against the authority columns of the reference records (step 4) where the annotators filled them in, and against links confirmed in review; share of values linked automatically, sent to review, and without candidates.
+- **Normalisation:** share of values matched to a control-list term automatically, sent to review, and without candidates; precision and recall of the terms against the reference records (step 4) where the annotators filled them in, and against review decisions; share of values correctly formatted per entry instruction (on a reviewed sample).
 - **Clusters:** share of clusters that combine values wrongly (checked on a sample) and share of values that should have been combined but were not.
+- **Enrichment:** share of clusters with a URI per vocabulary; precision on a reviewed sample.
 - **NER:** recall against the corpus indexes (share of index entries found on the referenced page), precision on a reviewed sample; per entity type and per role.
 - **Aboutness:** `ro_subjects` against the depicted subjects in the reference records, where the annotators filled them in.
 - **Comparison:** share of works matched to an RKD record; per property the distribution over same/only CRLB/only RKD/different.
@@ -1361,37 +1423,40 @@ Thresholds per part are set by the user beforehand, as in steps 2 and 4.
 
 ### Order of work
 
-1. Corpus indexes of the POC parts: segmentation (step 3) and parsing into `control_terms` and `index_references`.
-2. RKD data for the POC parts (export or interface), and the external lists needed for them (TGN, AAT subsets, Iconclass).
-3. Linking of the abbreviation lists (literature and exhibitions), confirmed by hand.
-4. Linking and clustering of holders, places, auctions and artists.
-5. NER on the descriptive texts of the POC parts, gazetteer first.
-6. Comparison with RKD for the works with an RKD ID.
+1. **5a** Corpus indexes of the POC parts: segmentation (step 3, rule 10) and parsing into `control_terms` and `index_references`; RKD data for the POC parts (export or interface) into `control_terms` and `rkd_records`.
+2. **5b** Normalisation of the abbreviation lists (literature and exhibitions), confirmed by hand; then of holders, places, auctions and artists, with clusters; the entry-instruction rules.
+3. **5c** LOD URIs for the clusters and list values: first those carried by the control lists, then by matching against TGN, AAT and Iconclass subsets.
+4. **5d** NER on the descriptive texts of the POC parts, gazetteer first.
+5. **5e** Comparison with RKD for the works with an RKD ID.
 
 ### Code
 
 New directory `scripts/enrichment/`:
 
-- `fetch_control_lists.py`: fetches and caches the external lists and the RKD data into `control_terms`; prints only counts.
-- `parse_indexes.py`: turns the index segments of step 3 into `control_terms` and `index_references`.
-- `link_values.py`: candidates, scoring, decisions and clusters for the step 4 values (5b).
-- `ner.py`: gazetteer matching, compact model and LLM fallback on the descriptive texts (5c), using `llm.py` from step 4.
-- `compare_rkd.py`: the comparison with RKD (5d), with a local report file.
+- `fetch_control_lists.py`: fetches and caches the RKD lists and records (5a) and the LOD vocabulary subsets (5c) into `control_terms` and `rkd_records`; prints only counts.
+- `parse_indexes.py`: turns the index segments of step 3 into `control_terms` and `index_references` (5a).
+- `normalise.py`: matching to control lists, clusters and the entry-instruction rules (5b).
+- `entry_rules/`: the entry instructions as rules, each with a reference to the section of the RKD manual.
+- `enrich.py`: LOD URIs for clusters and list values (5c).
+- `ner.py`: gazetteer matching, compact model and LLM fallback on the descriptive texts, roles and `ro_subjects` (5d), using `llm.py` from step 4.
+- `compare_rkd.py`: the comparison with RKD (5e), with a local report file.
 - `request_terms.py`: the list of missing terms in the RKD request format.
-- `review_links.py`: a local review file with the value, its context in the PDF and the candidates.
+- `review_enrichment.py`: a local review file with the value, its context in the PDF, the candidates and the URIs.
 
-New dependencies, to be confirmed when the code is written: a fuzzy matching library (rapidfuzz is already a dependency), a SPARQL or HTTP client for the external lists, and a compact NER model (GLiNER) if 5c needs it. Every model used is added to `README.md` under AI usage.
+New dependencies, to be confirmed when the code is written: a SPARQL or HTTP client for the external lists (rapidfuzz, for fuzzy matching, is already a dependency), and a compact NER model (GLiNER) if 5d needs it. Every model used is added to `README.md` under AI usage.
 
 ### Tests
 
 `tests/enrichment/`, on small hand-made control lists and values:
 
-- name matching handles `Last, First` against `First Last`, accents and OCR errors, and does not link when two candidates score close together;
+- name matching handles `Last, First` against `First Last`, accents and OCR errors, and does not assign a term when two candidates score close together;
 - a candidate whose dates of life exclude the date of the provenance stage is filtered out;
 - an LLM judge answer outside the candidate list is rejected;
-- a literature abbreviation linked once applies to all references using it;
+- each entry-instruction rule gives the RKD form (`£3 4s 2d` → `3.4.2` + `Lsd`, `Inv. no. 2258` → `2258`, `lot 550` → `550`, `(as Jan van Eyck)` → `as by Jan van Eyck`, no end date for the current location);
+- a literature abbreviation normalised once applies to all references using it;
 - rows of different objects for the same sale are merged into one auction;
 - an exhibition abbreviation with two venues becomes two exhibitions;
+- a URI carried by a control-list term is taken over; a cluster can have URIs from several vocabularies, and the export picks the one the RO model prescribes;
 - index parsing gives terms with printed pages and resolves them to page ids;
 - an index term found on its referenced page is a gazetteer mention; the same term elsewhere needs more evidence;
 - a figure named in the title of the work gets the role `depicted` and ends up in `ro_subjects` with the mention as evidence; a cited author gets `scholar` and does not;
@@ -1401,7 +1466,7 @@ New dependencies, to be confirmed when the code is written: a fuzzy matching lib
 ### Out of scope for this step
 
 - Writing data into RKD/Axiell or the Rubens Online datahub.
-- The validation interface (side-by-side view of the PDF with highlighted OCR, segments, values and entities, with accept/correct actions). All steps are designed for it (word ids, coordinates, status columns), but it is not yet planned as a step.
+- The validation interface (side-by-side view of the PDF with highlighted OCR, segments, values and entities, with accept/correct actions). All steps are designed for it (word ids, coordinates, status columns, `reviews`), but it is not yet planned as a step.
 
 ### Points to check first
 
@@ -1409,7 +1474,7 @@ New dependencies, to be confirmed when the code is written: a fuzzy matching lib
 - Which authority the RO model uses per property where several are possible (persons: RKDartists or Wikidata; places: TGN or RKD's geographic terms).
 - Licences and terms of use of the external lists when cached and redistributed (Iconclass, Getty, RKD).
 - Whether new terms should be requested from the RKD thesaurus, or Rubens Online keeps its own list.
-
+- Whether the normalised values should follow the RKD entry instructions in every case, or Rubens Online has its own conventions for some fields (for example names as `First Last` for display).
 ## Review and corrections (all steps)
 
 Every layer from step 2 on has a `status` column (`unreviewed`, `accepted`, `corrected`, `rejected`), and the rows of a layer are never changed after their run. A reviewer's decision, including a corrected value, is therefore stored separately, as an event:
@@ -1418,7 +1483,7 @@ Every layer from step 2 on has a `status` column (`unreviewed`, `accepted`, `cor
 -- One row per review decision, for any table with a status column.
 CREATE TABLE reviews (
     id           INTEGER PRIMARY KEY,
-    table_name   TEXT NOT NULL,      -- e.g. 'segments', 'ro_collection_stays', 'value_links', 'entity_mentions'
+    table_name   TEXT NOT NULL,      -- e.g. 'segments', 'ro_collection_stays', 'normalised_values', 'entity_mentions'
     row_id       INTEGER NOT NULL,
     column_name  TEXT,               -- NULL = the row as a whole
     action       TEXT NOT NULL CHECK (action IN ('accept', 'correct', 'reject', 'comment')),
