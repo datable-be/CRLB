@@ -71,6 +71,17 @@ This gives about 65 PDFs: 22 born-digital parts or sub-parts (47 files including
 
 The build fails if a manifest row has no file, if a `path` occurs twice, or if `excerpt_of` does not refer to another row.
 
+A second manifest, `data_manifest/parts.csv`, describes the CRLB parts themselves, for citations ("CRLB XIX (4), No. 22") and for Rubens Online:
+
+| Column    | Example                               | Note                                |
+| :-------- | :------------------------------------ | :---------------------------------- |
+| `part`    | `XIX (4)`                             | as in `documents.csv`               |
+| `title`   | `Portraits after Existing Prototypes` | title of the part as printed        |
+| `year`    | `2016`                                | year of publication                 |
+| `authors` |                                       | as on the title page, `;`-separated |
+
+Every `part` in `documents.csv` must occur in `parts.csv`; the build fails otherwise. Title, year and authors are filled in from the title pages and colophons, which also settles the open sub-part/volume questions.
+
 `text_source` is set from the PDF metadata, not from the folder: `Producer` "ABBYY FineReader 11", or "3-Heights" with `Creator` "Paperless" (the repaired files 09 and 19_1), or an empty producer (03) means `ocr`; an InDesign `Creator` means `born_digital`. The build re-checks this and warns on a mismatch.
 
 The manifest is written once by hand (with a helper script that lists candidates and metadata, printing no text) and checked by the user.
@@ -118,6 +129,14 @@ CREATE TABLE extraction_runs (
     options       TEXT NOT NULL       -- JSON: extraction flags and settings
 );
 
+-- One row per CRLB part, from data_manifest/parts.csv.
+CREATE TABLE parts (
+    part           TEXT PRIMARY KEY,       -- 'XIX (4)', 'XXVI (2.1)'
+    title          TEXT,
+    year           INTEGER,
+    authors        TEXT                    -- ';'-separated, as on the title page
+);
+
 -- One row per PDF file.
 CREATE TABLE documents (
     id             INTEGER PRIMARY KEY,
@@ -125,7 +144,7 @@ CREATE TABLE documents (
     path           TEXT NOT NULL UNIQUE,   -- = sqlar.name in pdfs.sqlite
     sha256         TEXT NOT NULL,          -- hex digest of the PDF bytes
     size           INTEGER NOT NULL,       -- bytes
-    part           TEXT NOT NULL,          -- from the manifest
+    part           TEXT NOT NULL REFERENCES parts(part),  -- from the manifest
     volume         TEXT,                   -- from the manifest
     section        TEXT NOT NULL CHECK (section IN ('main', 'index')),
     text_source    TEXT NOT NULL CHECK (text_source IN ('ocr', 'born_digital')),
@@ -271,6 +290,7 @@ Project configuration:
 - font, size and flags are right for bold, italic and superscript words, and a word with two styles gets `styles = 2`;
 - soft hyphens survive unchanged in `pages.text` and `words.text`;
 - `excerpt_of` is resolved to the right document id;
+- the build fails for a `part` missing from `parts.csv`, and `parts` is filled from it;
 - an FTS query finds a word on the right page;
 - `open_pdf` returns the document, and raises after the stored bytes are altered;
 - the build fails for a manifest row without a file, a duplicate path and a dangling `excerpt_of`;
@@ -419,7 +439,18 @@ CREATE TABLE correction_flags (
     candidate      TEXT NOT NULL,   -- the joined form that was not applied
     reason         TEXT NOT NULL    -- e.g. 'all pieces are words; ratio 3.1 < 20'
 );
+
+-- The run that later steps and exports use, per step. Steps 2, 3 and 4 can
+-- each be run several times; older runs stay in the database for comparison.
+CREATE TABLE active_runs (
+    step     TEXT PRIMARY KEY,      -- '2' (correction), '3' (segmentation), '4:<field>' (extraction)
+    run_id   INTEGER NOT NULL,      -- id in the run table of that step
+    set_at   TEXT NOT NULL,         -- ISO 8601, UTC
+    note     TEXT                   -- why this run was made active
+);
 ```
+
+`active_runs` is introduced here because step 2 is the first step with several runs; it is used the same way by steps 3 and 4. A run becomes active only by an explicit command, after its measurement, never automatically. For step 2 the active run is the last run of the chain (`based_on`), e.g. the 2b run built on the 2a run.
 
 A join is a contiguous range of word ids, because words are stored in reading order and a join never crosses a block. The corrected page text is rebuilt from `corrected_words`: tokens joined by a space within a line, a newline between lines, an empty line between blocks. For a fair comparison, the raw page text is rebuilt from `words` in the same way.
 
@@ -508,11 +539,19 @@ document
 ├── section               front matter, introduction/essays, catalogue, appendices,
 │                         abbreviations/bibliography, exhibitions, illustrations, indexes
 │   └── entry             catalogue number + title, e.g. "No. 22. Augustus: Painting (Fig. 79)"
-│       ├── field         heading, material/dimensions, location, date, provenance,
-│       │                 exhibited, copies, literature, description, notes
-│       └── copy          "(1) Painting (Fig. 80), whereabouts unknown; …" inside "copies"
-│           └── field     material/dimensions, location, provenance ("prov.:"), literature ("lit.:")
+│   │   ├── field         heading, material/dimensions, location, date, provenance,
+│   │   │   │             exhibited, copies, literature, description, notes
+│   │   │   ├── item      one provenance stage, one literature reference, one exhibition
+│   │   │   ├── paragraph a paragraph of the description
+│   │   │   └── note      one note, label = note number
+│   │   └── copy          "(1) Painting (Fig. 80), whereabouts unknown; …" inside "copies"
+│   │       └── field     material/dimensions, location, provenance ("prov.:"), literature ("lit.:")
+│   │           └── item  as above
+│   └── item              in the abbreviations/bibliography and exhibitions sections:
+│                         one abbreviation with its full citation
 ```
+
+Splitting a field into items is part of segmentation (it only marks ranges, by rules). Step 4 interprets items; it does not cut text up itself.
 
 An entry has the same skeleton in both volumes, 40 years apart:
 
@@ -535,10 +574,11 @@ The variation between volumes is in the label wording and case, the heading form
 ```sql
 -- One row per segmentation run.
 CREATE TABLE segmentation_runs (
-    id          INTEGER PRIMARY KEY,
-    started_at  TEXT NOT NULL,     -- ISO 8601, UTC
-    version     TEXT NOT NULL,     -- git commit of the scripts
-    options     TEXT NOT NULL      -- JSON: the volume configurations used
+    id                 INTEGER PRIMARY KEY,
+    started_at         TEXT NOT NULL,     -- ISO 8601, UTC
+    correction_run_id  INTEGER REFERENCES correction_runs(id),  -- text used for matching; NULL = raw
+    version            TEXT NOT NULL,     -- git commit of the scripts
+    options            TEXT NOT NULL      -- JSON: the volume configurations used
 );
 
 -- One row per structural part. A segment is a contiguous range of words in
@@ -548,9 +588,11 @@ CREATE TABLE segments (
     run_id         INTEGER NOT NULL REFERENCES segmentation_runs(id),
     document_id    INTEGER NOT NULL REFERENCES documents(id),
     parent_id      INTEGER REFERENCES segments(id),
-    kind           TEXT NOT NULL,   -- 'furniture', 'section', 'entry', 'copy', 'field'
+    kind           TEXT NOT NULL,   -- 'furniture', 'section', 'entry', 'copy', 'field',
+                                    -- 'item', 'paragraph', 'note'
     label          TEXT,            -- section name, entry number ('22', '10a', '1-1'),
-                                    -- copy number ('(3)'), field name ('provenance', 'notes', ...)
+                                    -- copy number ('(3)'), field name ('provenance', 'notes', ...),
+                                    -- note number ('19'), item/paragraph position
     first_word_id  INTEGER NOT NULL REFERENCES words(id),
     last_word_id   INTEGER NOT NULL REFERENCES words(id),
     rule           TEXT NOT NULL,   -- which rule created it
@@ -569,11 +611,23 @@ CREATE TABLE printed_pages (
     rule          TEXT NOT NULL,    -- 'furniture' (read from the page) or 'interpolated'
     PRIMARY KEY (run_id, page_id)
 );
+
+-- Note markers in the text, linked to their note.
+CREATE TABLE note_refs (
+    id               INTEGER PRIMARY KEY,
+    run_id           INTEGER NOT NULL REFERENCES segmentation_runs(id),
+    word_id          INTEGER NOT NULL REFERENCES words(id),     -- the marker ('2', '*'), or the word carrying it
+    note_segment_id  INTEGER NOT NULL REFERENCES segments(id),  -- kind = 'note'
+    rule             TEXT NOT NULL,   -- 'superscript', 'digit after word', ...
+    confidence       TEXT NOT NULL CHECK (confidence IN ('certain', 'probable', 'uncertain'))
+);
+CREATE INDEX note_refs_note ON note_refs(note_segment_id);
 ```
 
 Notes:
 
-- Segments refer to raw `words` ids, so segmentation does not depend on the OCR correction (step 2). The corrected tokens of step 2 map onto the same word ranges, so a field can be read in raw or corrected form.
+- Segments refer to raw `words` ids, so segmentation does not depend on the OCR correction (step 2). The corrected tokens of step 2 map onto the same word ranges, so a field can be read in raw or corrected form. Matching labels and patterns may use the corrected text; `correction_run_id` records which.
+- **Boundary conflicts with corrections.** A corrected token can cover several raw words. If a segment boundary falls inside such a token, the corrected text of the segment is undefined. Such a boundary is a conflict: the segment keeps its boundary, the corrected text of both segments uses the raw words for that token, and the case is listed in the run's checks for review. A conflict usually means either a wrong join (step 2) or a wrong boundary (step 3).
 - Segments of the same `kind` under the same parent do not overlap. Because ranges are contiguous, an entry that continues on the next page also spans the running head and page number in between; those words are covered by a `furniture` segment, and anything that reads the text of a segment skips words inside furniture segments.
 - `printed_pages` is needed because the PDFs have no page labels while citations and the indexes use printed page numbers (II: PDF page 298 is printed page 291; XIX (4): PDF page 89 is printed page 90). Page numbers that cannot be read (blank pages, plates) are interpolated from their neighbours.
 - `confidence` makes it possible to review the uncertain cases first.
@@ -593,6 +647,15 @@ The rules run in this order, each on the result of the previous one:
     - `notes`: the trailing run of note-size lines starting with a note number, up to the next entry.
 5. **Copies** within a `copies` field: each starts at `(n)` at the start of a line or block, supported by an RKD link at that position; within a copy, sub-fields after `prov.:`, `lit.:` and similar abbreviations.
 6. **Cross-references** such as `provenance: see No. 21.` are recorded as a field with label `provenance` and a `reason` noting the reference. Resolving them is step 4.
+7. **Paragraphs and notes.**
+    - `paragraph`: the `description` field is split at paragraph starts: a new block with a first-line indent (II: the indented lines at x=52 against 42) or a vertical gap (XIX (4): one block per paragraph).
+    - `note`: the `notes` field is split at note numbers at the start of a line (`1.⇥`, `19 `), checked against the expected sequence; the note number is the `label`.
+8. **Note markers** (`note_refs`): in born-digital volumes, superscript words (flag 1) in the description and fields; in OCR volumes, a digit or `*` directly attached to the end of a word or after punctuation (`Julienne.1`), accepted only if a note with that number exists in the same entry and the numbers occur in increasing order. Each marker is linked to its note.
+9. **Items.** Fields that are lists are split into `item` segments:
+    - `provenance` and `prov.:`: at `;` outside brackets and quotation marks (the stages of the provenance chain);
+    - `literature`, `lit.:`, `exhibited`, `exh.:`: at `;` outside brackets (one reference each);
+    - in the abbreviations/bibliography and exhibitions sections: one item per abbreviation with its full citation, recognised by the hanging-indent layout and the abbreviation pattern (author, short title, year; or place, year).
+      The separator and the item pattern are part of the volume configuration, because the conventions changed over time (the 2015 bibliography rules apply from V (1), 2014).
 
 Patterns, label lists, style thresholds and furniture bands are kept in one configuration file per volume (`data_manifest/segmentation/<part>.toml`, in git), with shared defaults. Configurations are developed on a few pages and then checked on the whole volume.
 
@@ -605,7 +668,10 @@ Built-in checks per document, reported as counts:
 - in `_links` documents: every RKD link lies in the heading of an entry or at the start of a copy, and every entry has a link (exceptions listed);
 - running heads agree with the entry segments on their pages;
 - printed page numbers increase by one per page, apart from interpolated pages;
-- no words outside a section (except furniture).
+- no words outside a section (except furniture);
+- notes are numbered consecutively per entry, every note has at least one marker, and every marker resolves to a note;
+- every literature and exhibition item matches an abbreviation item of the same part (unmatched items listed);
+- the number of boundary conflicts with the active correction run.
 
 Reference data:
 
@@ -622,7 +688,8 @@ Reference data:
 
 New directory `scripts/segmentation/`:
 
-- `segment.py`: runs the rules for the given documents with their configuration, writes `segmentation_runs`, `segments` and `printed_pages`. Prints only counts and check results.
+- `segment.py`: runs the rules for the given documents with their configuration, writes `segmentation_runs`, `segments`, `printed_pages` and `note_refs`. Prints only counts and check results.
+- `set_active_run.py`: sets the active run of a step in `active_runs` (shared with steps 2 and 4).
 - `review_segments.py`: writes a review file for a sample of entries (local, not printed).
 - `data_manifest/segmentation/`: the per-volume configuration files.
 
@@ -636,7 +703,12 @@ Project configuration as in step 1.
 - entries are found by heading style and pattern, including a damaged number (`10«.`) between `10.` and `11.`;
 - labelled fields are found in both forms (`provenance:` and `P rov en a n ce:` with two sizes);
 - copies are split at `(n)` and their `prov.:`/`lit.:` sub-fields are found;
-- notes at the end of an entry are a separate field;
+- notes at the end of an entry are a separate field, split into single notes with their numbers;
+- the description is split into paragraphs in both layouts;
+- superscript markers and attached digits (`Julienne.1`) are linked to the right note; a digit that is part of a number (`1617`) is not;
+- provenance is split into stages at `;`, but not at a `;` inside brackets or quotation marks;
+- abbreviation-list entries become items, and a literature item is matched to its abbreviation;
+- a segment boundary inside a joined token is reported as a conflict;
 - an entry continuing on the next page, past the furniture, stays one segment;
 - the checks report a gap in the numbering and an RKD link outside any entry.
 
