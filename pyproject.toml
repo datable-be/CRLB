@@ -20,6 +20,10 @@ testpaths = ["tests"]
 
 [tool.ruff]
 src = ["scripts/OCR", "tests"]
+extend-exclude = ["scripts/archive"]
 
 [tool.ty.environment]
 extra-paths = ["scripts/OCR"]
+
+[tool.ty.src]
+exclude = ["scripts/archive"]
