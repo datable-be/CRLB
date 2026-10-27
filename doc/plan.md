@@ -444,7 +444,8 @@ CREATE TABLE correction_flags (
 -- each be run several times; older runs stay in the database for comparison.
 CREATE TABLE active_runs (
     step     TEXT PRIMARY KEY,      -- '2' (correction), '3' (segmentation), '4:<field>' (extraction),
-                                    -- '5b' (normalisation), '5c' (enrichment), '5d' (named entities), '5e' (RKD comparison)
+                                    -- '5b' (normalisation), '5c' (enrichment), '5d' (named entities), '5e' (RKD comparison),
+                                    -- '5f' (RKD link products)
     run_id   INTEGER NOT NULL,      -- id in the run table of that step
     set_at   TEXT NOT NULL,         -- ISO 8601, UTC
     note     TEXT                   -- why this run was made active
@@ -497,6 +498,8 @@ Only if 2a and 2b do not reach the threshold. Even then the LLM is constrained:
 - its output is checked against the same invariants (2a: only whitespace removed; 2b: only substitutions from the table);
 - model choice follows the project preference: local first, then an EU provider;
 - the model is listed in `README.md` under AI usage.
+
+A candidate for comparison is the OCR-correction model tried earlier on CRLB text (`scripts/archive/OCR_correct.py`, see "Earlier work"), used as a judge rather than as a free rewriter.
 
 ### Code
 
@@ -1273,11 +1276,11 @@ The instructions are kept as a rules file in git (`scripts/enrichment/entry_rule
 - **Missing terms:** values with no term in an RKD list are collected in a request list in the format of the RKD manual (_Bijlage 2: Termen aanvragen voor validatielijsten_), so the Rubenshuis can request them from the RKD thesaurus instead of entering them one by one.
 
 ```sql
--- One row per run of 5b, 5c, 5d or 5e.
+-- One row per run of 5b, 5c, 5d, 5e or 5f.
 CREATE TABLE enrichment_runs (
     id                  INTEGER PRIMARY KEY,
     started_at          TEXT NOT NULL,
-    part_of_step        TEXT NOT NULL CHECK (part_of_step IN ('5b', '5c', '5d', '5e')),
+    part_of_step        TEXT NOT NULL CHECK (part_of_step IN ('5b', '5c', '5d', '5e', '5f')),
     method              TEXT NOT NULL CHECK (method IN ('rules', 'llm', 'gliner', 'manual', 'reference')),
     model               TEXT,
     extraction_run_ids  TEXT NOT NULL,     -- JSON list of the ro_runs used
@@ -1334,6 +1337,7 @@ How:
 1. **Through the control list first.** An RKD term often already carries a URI, or a link to Wikidata, ULAN or TGN; an RO list value carries its AAT URI. These are taken over directly.
 2. **Otherwise by matching** against a local copy of the vocabulary, with the same candidate, score and decision procedure as in 5b (with type and dates as filters: a place must be a TGN place, a person's dates must fit).
 3. **Local copies:** external vocabularies are fetched in bulk (Getty and Wikidata SPARQL endpoints, Iconclass data downloads), limited to relevant subsets (for example TGN places in Europe, RKDartists active 1550–1750), and stored in `control_terms` with their source and date. Matching happens locally. This keeps runs reproducible and avoids sending names from the text (including private owners) to outside services one by one.
+4. **Term lists** that contain no personal names (object names, materials, subjects) may also be reconciled through the NDE Termennetwerk, which offers AAT, Iconclass and other vocabularies behind one API; an earlier script for this exists (`scripts/archive/get_termennetwerk_URI.py`, see "Earlier work").
 
 ```sql
 -- LOD URIs of a cluster (a cluster can have several: RKDartists and Wikidata, TGN and RKD places).
@@ -1438,6 +1442,41 @@ CREATE TABLE rkd_comparison (
 
 The result is a report per part and per work: what can be added, and what needs a decision. Writing back to RKD/Axiell or the Rubens Online datahub is not part of this step; the export provides the data in the format agreed with the client.
 
+### 5f: RKD links as products
+
+The RKD links in the PDFs, together with the segments of step 3, make two products possible that the project notes ask for (section 4.3.2) and that need little extra work:
+
+1. **A CRLB reference per RKDimages record.** For every work with an RKD ID (from the links, or matched in 5e): the CRLB part, catalogue number (and copy number), title, document, PDF page and printed page of the entry, and the Markdown export of the entry (step 4) as preview. This lets RKDimages (or Rubens Online) show a reference to the CRLB and a preview of the entry, without the full extraction having to be accepted first.
+2. **Embedded RKD links in PDFs that lack them.** "Het is gewenst het toevoegen van embedded URL's verder te zetten voor de hoofdnummers": for the parts without `_links` version, a copy of the PDF is made with a link annotation on the heading of each main entry (not the copies), pointing to the RKDimages record found in 5e. The link rectangle is the bounding box of the heading words (step 1 coordinates). Only links with an accepted RKD match are added.
+
+Rules:
+
+- The original PDFs are never changed. The linked copies are new files (`data/linked/<part>/…_links.pdf`), stored with their own hash in `pdfs.sqlite`, and recorded as derived from the original.
+- The existing link conventions are followed: the URI pattern of the most recent `_links` files (`https://rkd.nl/images/<id>`), one link per main number.
+- Before adding links, the existing link annotations of a PDF are checked, so no duplicates are made.
+
+```sql
+-- One row per RKD link added to a PDF copy.
+CREATE TABLE added_links (
+    id                 INTEGER PRIMARY KEY,
+    run_id             INTEGER NOT NULL REFERENCES enrichment_runs(id),
+    document_id        INTEGER NOT NULL REFERENCES documents(id),   -- the original PDF
+    linked_path        TEXT NOT NULL,                               -- the PDF copy with links (sqlar name)
+    linked_sha256      TEXT NOT NULL,
+    object_id          INTEGER NOT NULL REFERENCES ro_objects(id),  -- the main entry
+    rkd_id             TEXT NOT NULL,
+    uri                TEXT NOT NULL,
+    page_id            INTEGER NOT NULL REFERENCES pages(id),
+    x0                 REAL NOT NULL,
+    y0                 REAL NOT NULL,
+    x1                 REAL NOT NULL,
+    y1                 REAL NOT NULL,
+    status             TEXT NOT NULL DEFAULT 'unreviewed'
+);
+```
+
+The CRLB references (product 1) are an export (CSV and JSON, one row per RKD ID), generated from `ro_objects`, `ro_object_identifiers`, `segments` and `printed_pages`; they need no table of their own.
+
 ### Measurement
 
 - **Normalisation:** share of values matched to a control-list term automatically, sent to review, and without candidates; precision and recall of the terms against the reference records (step 4) where the annotators filled them in, and against review decisions; share of values correctly formatted per entry instruction (on a reviewed sample).
@@ -1446,6 +1485,7 @@ The result is a report per part and per work: what can be added, and what needs 
 - **NER:** recall against the corpus indexes (share of index entries found on the referenced page), precision on a reviewed sample; per entity type and per role.
 - **Aboutness:** `ro_subjects` against the depicted subjects in the reference records, where the annotators filled them in.
 - **Comparison:** share of works matched to an RKD record; per property the distribution over same/only CRLB/only RKD/different.
+- **RKD link products:** share of main entries of each part with a CRLB reference and, for parts without links, with an added link; all added links checked on a sample by opening them in the linked PDF.
 
 Thresholds per part are set by the user beforehand, as in steps 2 and 4.
 
@@ -1456,6 +1496,7 @@ Thresholds per part are set by the user beforehand, as in steps 2 and 4.
 3. **5c** LOD URIs for the clusters and list values: first those carried by the control lists, then by matching against TGN, AAT and Iconclass subsets.
 4. **5d** NER on the descriptive texts of the POC parts, gazetteer first.
 5. **5e** Comparison with RKD for the works with an RKD ID.
+6. **5f** CRLB references per RKD record; then linked PDF copies for the parts without links.
 
 ### Code
 
@@ -1469,6 +1510,8 @@ New directory `scripts/enrichment/`:
 - `ner.py`: gazetteer matching, compact model and LLM fallback on the descriptive texts, roles and `ro_subjects` (5d), using `llm.py` from step 4.
 - `compare_rkd.py`: the comparison with RKD (5e), with a local report file.
 - `request_terms.py`: the list of missing terms in the RKD request format.
+- `rkd_references.py`: the CRLB reference per RKD record (5f), as CSV and JSON.
+- `add_links.py`: the PDF copies with embedded RKD links for the main entries (5f).
 - `review_enrichment.py`: a local review file with the value, its context in the PDF, the candidates and the URIs.
 
 New dependencies, to be confirmed when the code is written: a SPARQL or HTTP client for the external lists (rapidfuzz, for fuzzy matching, is already a dependency), and a compact NER model (GLiNER) if 5d needs it. Every model used is added to `README.md` under AI usage.
@@ -1489,7 +1532,8 @@ New dependencies, to be confirmed when the code is written: a SPARQL or HTTP cli
 - an index term found on its referenced page is a gazetteer mention; the same term elsewhere needs more evidence;
 - a figure named in the title of the work gets the role `depicted` and ends up in `ro_subjects` with the mention as evidence; a cited author gets `scholar` and does not;
 - a cross-reference `No. 15` points to the right `ro_objects` row of the same part, and a mention never has more than one target;
-- the comparison gives `same`, `only_crlb`, `only_rkd` and `different` correctly for a small pair of records.
+- the comparison gives `same`, `only_crlb`, `only_rkd` and `different` correctly for a small pair of records;
+- a linked PDF copy has exactly one new link per main entry, on the heading, with the right URI; the original file is unchanged; an existing link is not duplicated.
 
 ### Out of scope for this step
 
@@ -1503,6 +1547,29 @@ New dependencies, to be confirmed when the code is written: a SPARQL or HTTP cli
 - Licences and terms of use of the external lists when cached and redistributed (Iconclass, Getty, RKD).
 - Whether new terms should be requested from the RKD thesaurus, or Rubens Online keeps its own list.
 - Whether the normalised values should follow the RKD entry instructions in every case, or Rubens Online has its own conventions for some fields (for example names as `First Last` for display).
+## Earlier work
+
+Work done before this project that the plan builds on or compares with:
+
+- **`scripts/archive/OCR_correct.py`**: an experiment with LLM-based OCR correction, using the LoRA fine-tune `pbevan11/llama-3.1-8b-ocr-correction` of Llama 3.1 8B (Hugging Face `transformers` and `peft`, CUDA GPU required), tried on a CRLB example with the typical spacing errors ("Pierre Bautier, Les esquisses d e R ubens au M u sée d e B ru xelles"). The model rewrites the text freely, which is what step 2 avoids; it is a candidate for comparison in step 2c, as a judge between candidates, not as a rewriter. Running it needs a GPU, which the development machine does not have.
+- **`scripts/archive/get_termennetwerk_URI.py`**: reconciliation of a CSV list of terms against the NDE Termennetwerk GraphQL API (`termennetwerk-api.netwerkdigitaalerfgoed.nl`), with Iconclass or AAT as source, writing URI and preferred label per term. Useful for step 5c for term lists without personal names; for names, step 5 matches against local copies instead. The script queries one term at a time, keeps every hit without a decision, and has Dutch identifiers; it would be rewritten to the conventions of this repository if reused.
+- **Un2Structured** (Arnoud Wils, AI4Culture hackathon, KU Leuven, February 2025): extraction of structured JSON from Corpus Rubenianum PDFs, focused on provenance and iconography, with LlamaParse (PDF parsing), LlamaIndex, the Cohere LLM API and Pydantic; the team tweaked its prompt templates extensively and raised the question of how to valorise the extracted data ([Europeana write-up, March 2025](https://pro.europeana.eu/post/how-ai-is-transforming-digital-cultural-heritage)). With the team it was agreed to explore a continuation, starting with the technical requirements. The write-up does not describe how pages were segmented, how results were checked or how well it worked; if its code or results are available, they serve as a comparison for step 4. Its question about valorisation is what steps 4 and 5 answer: records in the RO model, normalised to the RKD lists, with LOD URIs.
+- **A script that splits the PDFs on the RKD links**, mentioned at the kick-off, has not been found in the project data. If it turns up, it is compared with the entry detection of step 3.
+
+## Knowledge sharing
+
+The offer commits to sharing the scripts and the knowledge built in this work package:
+
+- **Open licence.** The repository is published on GitHub under the MIT licence (`LICENSE`, copyright Datable). The licence covers the code and the documentation in the repository. It does not cover the CRLB content: PDFs, extracted text, reference records and exports stay in `data/`, outside git.
+- **Language.** Everything in the repository is in English: code, comments, documentation, commit messages and the plan. This was agreed with the client.
+- **Documentation** of the procedures, the scripts and the architecture:
+    - `README.md`: what the project does, how to install and run it (`uv`, `make` targets), and the AI tools and models used in development and production;
+    - `doc/plan.md` (this plan), `doc/OCR.md`, `doc/NER.md` and per step a short description of what was actually built and measured, kept up to date with the code;
+    - the annotation guide for the reference records (step 4) and the entry-instruction rules (step 5b), which are written for domain experts;
+    - docstrings and tests in the code, so each step can be understood and rerun on its own.
+- **Involvement of the client.** Each step ends with a measurement against a threshold the client agrees to, and the review files of each step are made for the Rubenshuis to check. Decisions that are the client's (open questions, thresholds, export of unreviewed data) are listed in the plan.
+- **Workshop.** The offer includes a workshop (Workshop 2) for an audience that can use Python and AI. Its material is built from the repository: the plan, the measurements per step, and runnable examples on a small, shareable sample (for example a born-digital page or synthetic test PDFs, since the CRLB content itself cannot be published).
+
 ## Review and corrections (all steps)
 
 Every layer from step 2 on has a `status` column (`unreviewed`, `accepted`, `corrected`, `rejected`), and the rows of a layer are never changed after their run. A reviewer's decision, including a corrected value, is therefore stored separately, as an event:
