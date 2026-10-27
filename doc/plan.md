@@ -725,6 +725,18 @@ Turn the segments of step 3 into structured records that follow the **Rubens Onl
 
 Step 4 records **what the text says**, verbatim and in the structure of the RO model. Linking values to authorities (RKD Artists, TGN, AAT, Iconclass, Wikidata) and reconciling with the existing RKD/Axiell data is step 5; the `*_id` columns for authorities stay empty in step 4.
 
+### Target: Rubens Online records or RKDimages fields
+
+It is not yet decided whether Rubens Online will have its own records for collections, agents, auctions and exhibitions, or will link to the RKD. The existing manual registration is done in RKDimages (Adlib/Axiell), following the RKD manual (*Handleiding RKDdatabases*, in `doc/project/`, not in git), and the RO model carries an RKD mapping per property. Step 4 is therefore designed so that both targets can be served from the same rows: the verbatim values and the structure are the same, only the authority step (5) and the export differ.
+
+What the RKD manual adds for step 4 and 5 (RKDimages, screens 1, 6, 7 and 8):
+
+- **Provenance** is two chronological field groups: collections (_Herkomst 1_: collection name from a validation list, inventory number, how acquired, begin and end date in ISO format, a date remark such as `seen`, `reported`, `date of auction`, a special status such as lost or destroyed with its year) and auctions (_Herkomst 2_: a link to a record in the RKD auction file by barcode, lot number, vendor, buyer, amount and currency). This matches the RO split into collection stays and auctions, and so the `ro_collection_stays` / `ro_auctions` design below.
+- **Conventions** that the normalisation (rules) follows: dates as `YYYY`, `YYYY-MM` or `YYYY-MM-DD`; no end date for the current or last known location; amounts without thousands separators, pounds/shillings/pence as `3.4.2` with currency `Lsd`; unknown owners as _Private collection_, unknown dealers as _Art dealer_, no provenance as _Whereabouts unknown_; one exhibition occurrence per venue for travelling exhibitions; `as by …`, `listed as '…'` in the remark of a literature or auction reference.
+- **Literature** is cited by RKD citation abbreviations (`Jaffé 1989`, `Corpus Rubenianum Ludwig Burchard` with `pt. 18-2 (1986), p. 123-130, no. 6, copy 12`), which differ from the CRLB abbreviations (`Jaffé, Catalogo, 1989`). Mapping one to the other is part of step 5.
+- **Attribution** is a status (current/rejected) with a qualification (`atelier van`, `naar`, `toegeschreven aan`, …) and an RKDartists name; copies link only to their prototype.
+- **Privacy:** protected private owners may not be shown publicly in RKDimages (_Private collection_ with the name in a non-public field). The CRLB names private owners in the provenance. The export must respect this (see "Points to check first").
+
 ### Principles
 
 The same as in steps 2 and 3:
@@ -771,7 +783,7 @@ CREATE TABLE ro_runs (
     id                   INTEGER PRIMARY KEY,
     started_at           TEXT NOT NULL,
     field                TEXT NOT NULL,     -- 'object', 'provenance', 'exhibition', 'literature', 'text'
-    method               TEXT NOT NULL CHECK (method IN ('rules', 'llm')),
+    method               TEXT NOT NULL CHECK (method IN ('rules', 'llm', 'reference')),
     model                TEXT,              -- name, version, quantisation; NULL for rules
     runtime              TEXT,              -- e.g. 'ollama 0.x', 'llama.cpp server bNNNN'; NULL for rules
     prompt_sha           TEXT,              -- hash of prompt + JSON schema (both in git)
@@ -858,6 +870,7 @@ CREATE TABLE ro_collection_stays (
     collection_removal_derived   INTEGER NOT NULL DEFAULT 0,  -- 1 = taken from the next stage
     collection_removal_method    TEXT,
     collection_removal_note      TEXT,
+    collection_date_note         TEXT,              -- RKD 'Remark date': 'seen', 'reported', 'date of auction', ...
     collection_is_current        INTEGER NOT NULL,
     uncertain                    INTEGER NOT NULL DEFAULT 0   -- '?', 'possibly', 'probably'
 );
@@ -1014,11 +1027,45 @@ Runtime: Ollama or the llama.cpp server (a llamafile is llama.cpp packaged as on
 
 Every model and runtime used is added to `README.md` under AI usage.
 
+### Reference records
+
+The offer states: "Op basis van de analyse, datamapping en reeds aanwezige data in RKD/Axiell, worden referentierecords aangemaakt. Deze referentierecords worden gebruikt voor controle, evaluatie en ontwikkeling van de AI prompt." Reference records are the ground truth for step 4, for the rules and the LLM alike: they say, for a selection of entries, exactly which rows step 4 should produce. They are made by hand.
+
+**What a reference record contains.** For one entry (and its copies and prints): every row step 4 should produce, in the same tables and columns as the extraction (`ro_objects`, `ro_dimensions`, `ro_collection_stays`, `ro_auctions`, `ro_object_sources`, …), with the verbatim values as they are in the CRLB text and the list choices (transfer method, collection type, attribution status, …). The authority columns (`*_id`) are optional: filled where the annotator knows them, they serve later as reference for step 5. A reference record also confirms the step 3 segments of the entry (boundaries of entry, copies, fields and items), so the same set serves as hand-checked set for step 3.
+
+**What a reference record follows: the CRLB text, not the RKD record.** RKD records may contain information from other sources, later updates or different interpretations. The reference record encodes what the CRLB text says, because that is what extraction can find. Where the RKD record differs, the difference is noted in the reference record (`review_note`), because it is useful input for step 5 (reconciliation).
+
+**Selection.** Per POC volume (XIX (4) and II part 1) about 25 entries, chosen to cover the variation rather than at random:
+
+- primary works, copies and prints; entries with many and with no copies;
+- short and long provenance chains, with sales, dealers, inheritance, uncertain stages (`?`), `his sale`, prices in old currencies and cross-references (`see No. 21`);
+- lost and destroyed works, whereabouts unknown;
+- entries spread over two pages, and entries with damaged OCR (in II);
+- entries with and without exhibitions, literature with resolved and unresolved abbreviations.
+
+The selection is split once, with a fixed seed and recorded in git, into a **development set** (about 15 entries per volume) and a **test set** (about 10). Prompt examples (few-shot) and rule tuning use only the development set. The test set is used once per version of rules and prompts.
+
+**How they are made.** Starting from an empty record costs most time; starting from a pre-filled one is faster but risks copying its mistakes. The procedure is therefore:
+
+1. A script pre-fills a reference record per entry from the RKD/Axiell export where it exists (mapped to the step 4 columns), otherwise from a rules-only extraction run. The source of each pre-filled value is marked.
+2. The annotator checks every value against the PDF (with the review file of step 3: the PDF region next to the values), corrects, completes and removes, and marks the record as done. Every pre-filled value must be confirmed or changed; untouched values block the import.
+3. An import script checks the record (schema, list values, verbatim values occur in the entry text, positions consistent) and loads it into the database as a run with `method = 'reference'` (in `ro_runs`) and `status = 'accepted'`.
+
+The pre-filled files are JSON per entry (readable in an editor, diffable), or a spreadsheet per table if the annotators prefer that; the import accepts both.
+
+**Who.** Domain knowledge is needed to decide, for example, whether a stage is a collection stay or a sale, or what the transfer method is. The reference records are therefore made by or with the Rubenshuis, with the developer preparing, importing and checking them. A short **annotation guide** (in `doc/`) records the decisions, with examples, so that annotators decide in the same way and the LLM prompts can follow the same rules: what counts as a stage, how `his sale` and buyers are recorded, when a removal date is derived, how uncertainty is marked, which list value is used for borderline cases. Where the RO model, the RKD manual and the CRLB style guide differ, the guide states which one is followed in step 4 (in principle: the verbatim CRLB text for values, the RO lists for choices).
+
+**Agreement.** If two annotators are available, a few entries (for example 5) are done by both, to measure agreement and to sharpen the annotation guide. Disagreement between people is an upper bound for what extraction can be expected to reach.
+
+**Storage.** Reference records contain verbatim fragments of the CRLB text, so they are stored with the data (`data/reference/`, outside git), not in the public repository. The selection, the split, the annotation guide and the scripts are in git.
+
+**Effort.** The offer reserves 3 person-days for analysis, mapping and reference records together. About 50 entries with all their copies is the realistic size within that budget; a larger set needs more time from the Rubenshuis.
+
 ### Measurement
 
-**Reference data.** The Rubenshuis has registered several volumes by hand in Adlib/Axiell, managed by the RKD (2023–2025, including XIX (4) and XII, see the presentation). Those records give, for the same works, the provenance, exhibitions and literature as entered by people. An export for the POC volumes is to be requested. Where no reference exists, a small hand-checked set is made by the user from the review file.
+**Reference data:** the reference records (see above). An export of the RKD/Axiell records of the POC volumes is requested to pre-fill them.
 
-**Development and test split** per volume, as in step 2: rules and prompts are tuned on development entries only; test entries are used once per version.
+**Development and test split** per volume, as defined for the reference records: rules and prompts are tuned on development entries only; test entries are used once per version.
 
 **Metrics** per field and per method:
 
@@ -1032,6 +1079,7 @@ Every model and runtime used is added to `README.md` under AI usage.
 
 ### Order of work
 
+0. Annotation guide, selection and split of the reference entries; pre-filling and hand-checking of the development set.
 1. XIX (4), a few entries: object core, literature and exhibitions (rules only) and the abbreviation list.
 2. XIX (4): provenance with rules plus the local LLM; comparison of the two local models.
 3. The same for II part 1 (`02_1_links`), with the OCR correction of step 2.
@@ -1048,6 +1096,10 @@ New directory `scripts/extraction/`:
 - `vocabularies/`: the RO value lists used (Object names, Material_support, Attribution status, Transfer method, Collection Type, Currencies, Inscription Type, Source Types, Artistic relation types) as CSV with label and URI, and the CRLB-to-RO mapping tables.
 - `review_extraction.py`: writes a local review file per entry (the PDF region next to the extracted rows), never to the console.
 - `export_ro.py`: writes RO JSON records from the active runs.
+- `reference/prefill.py`: writes pre-filled reference records (JSON per entry) from the RKD/Axiell export or a rules run, to `data/reference/`.
+- `reference/import_reference.py`: checks hand-made reference records and loads them as a `reference` run.
+- `reference/selection.csv` (in git): the selected entries with their development/test assignment.
+- `compare.py`: compares an extraction run with the reference run per table and property, and writes the metrics (counts only to the console, details to a local file).
 
 New dependencies, to be confirmed when the code is written: an HTTP client for the model runtime, and a schema library (for example Pydantic) to define the JSON schemas once and validate answers.
 
@@ -1062,13 +1114,17 @@ New dependencies, to be confirmed when the code is written: an HTTP client for t
 - an LLM answer with a span that is not in the input, or a choice outside the list, is rejected and logged;
 - the provenance chain keeps its order across collection stays and auctions, and a derived removal date is marked as derived;
 - `Ibid.` in a note is resolved to the previous note's citation, and figure references are removed from `text_display`;
-- the export produces RO property names and leaves out rejected rows.
+- the export produces RO property names and leaves out rejected rows;
+- the reference import rejects a record with a value that does not occur in the entry text, a value outside a list, or an unconfirmed pre-filled value;
+- the comparison aligns provenance stages by position and reports missing, extra and different stages.
 
 ### Points to check first
 
-- Whether the RO model will get its own records for collections, agents and auctions with Rubens Online URIs, or link to RKD records; this decides what step 5 has to produce.
-- How the RKD/Axiell export of the registered volumes is structured, so the comparison can be automated.
+- Whether the RO model will get its own records for collections, agents and auctions with Rubens Online URIs, or link to RKD records (validation lists for collections, the RKD auction file, RKD exhibitions, citation abbreviations, RKDartists); this decides what step 5 has to produce.
+- How the RKD/Axiell export of the registered volumes is structured (Adlib field names and tags are in the RKD manual), so the pre-filling and comparison can be automated.
 - Whether `unreviewed` rows may be exported.
+- How private owners named in the CRLB provenance are handled in an export, given the RKD rule that protected private collections are not shown publicly.
+- Who at the Rubenshuis makes the reference records, and how much time is available for them.
 
 ## Volumes without a PDF
 
