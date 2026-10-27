@@ -7,6 +7,13 @@ dependencies = [
     "rapidfuzz>=3.14.6",
 ]
 
+[project.scripts]
+crlb = "crlb.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9.7,<0.10.0"]
+build-backend = "uv_build"
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
@@ -15,15 +22,10 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["scripts/OCR"]
 testpaths = ["tests"]
 
 [tool.ruff]
-src = ["scripts/OCR", "tests"]
 extend-exclude = ["scripts/archive"]
-
-[tool.ty.environment]
-extra-paths = ["scripts/OCR"]
 
 [tool.ty.src]
 exclude = ["scripts/archive"]

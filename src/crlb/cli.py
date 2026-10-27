@@ -1,0 +1,30 @@
+"""The `crlb` command: one subcommand per action of the pipeline."""
+
+import argparse
+
+from crlb.ocr import analyse_specimens, sample_specimens
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser with all subcommands."""
+    parser = argparse.ArgumentParser(prog="crlb", description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    ocr = commands.add_parser("ocr", help="OCR quality test on specimen pages")
+    ocr_commands = ocr.add_subparsers(dest="ocr_command", required=True)
+    for name, module in (("sample", sample_specimens), ("analyse", analyse_specimens)):
+        module.configure(
+            ocr_commands.add_parser(
+                name,
+                help=(module.__doc__ or "").splitlines()[0],
+                description=module.__doc__,
+                formatter_class=argparse.RawDescriptionHelpFormatter,
+            )
+        )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Parse the command line and run the chosen command."""
+    args = build_parser().parse_args(argv)
+    args.func(args)

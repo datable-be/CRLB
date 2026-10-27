@@ -150,14 +150,16 @@ def analyse(specimens_dir: Path) -> tuple[list[dict], list[dict], int]:
     return rows, summary, skipped
 
 
-def main() -> None:
-    """Parse arguments, run the analysis and print the summary rates."""
-    parser = argparse.ArgumentParser(description=__doc__)
+def configure(parser: argparse.ArgumentParser) -> None:
+    """Add the arguments of this command to its parser."""
     parser.add_argument(
-        "specimens_dir", type=Path, help="directory written by sample_specimens.py"
+        "specimens_dir", type=Path, help="directory written by `crlb ocr sample`"
     )
-    args = parser.parse_args()
+    parser.set_defaults(func=run)
 
+
+def run(args: argparse.Namespace) -> None:
+    """Run the analysis and print the summary rates."""
     rows, summary, skipped = analyse(args.specimens_dir)
     print(
         f"{len(rows)} corrected specimens analysed, {skipped} not yet corrected (skipped)"
@@ -171,7 +173,3 @@ def main() -> None:
         print(
             f"Details in {args.specimens_dir}/results.csv, summary.csv, confusions.csv"
         )
-
-
-if __name__ == "__main__":
-    main()

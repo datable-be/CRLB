@@ -94,9 +94,8 @@ def sample_document(
     return rows
 
 
-def main() -> None:
-    """Parse arguments and write the specimen sample to the output directory."""
-    parser = argparse.ArgumentParser(description=__doc__)
+def configure(parser: argparse.ArgumentParser) -> None:
+    """Add the arguments of this command to its parser."""
     parser.add_argument("pdf_dir", type=Path, help="directory containing the CRLB PDFs")
     parser.add_argument("out_dir", type=Path, help="new directory for the specimens")
     parser.add_argument("--pages", type=int, default=2, help="pages to sample per file")
@@ -107,11 +106,16 @@ def main() -> None:
     parser.add_argument(
         "--min-words", type=int, default=50, help="skip pages with fewer words"
     )
-    args = parser.parse_args()
+    parser.set_defaults(func=run)
 
+
+def run(args: argparse.Namespace) -> None:
+    """Write the specimen sample to the output directory."""
     # Refuse to reuse a directory so corrected gt.txt files are never overwritten
     if args.out_dir.exists():
-        parser.error(f"{args.out_dir} already exists; choose a new output directory")
+        raise SystemExit(
+            f"{args.out_dir} already exists; choose a new output directory"
+        )
     args.out_dir.mkdir(parents=True)
 
     rows = []
@@ -131,7 +135,3 @@ def main() -> None:
         writer.writeheader()
         writer.writerows(rows)
     print(f"{len(rows)} specimens written to {args.out_dir}")
-
-
-if __name__ == "__main__":
-    main()

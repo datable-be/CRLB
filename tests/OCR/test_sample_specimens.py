@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pymupdf
 
-from sample_specimens import catalogue_pages, sample_document, short_name
+from crlb.ocr.sample_specimens import catalogue_pages, sample_document, short_name
 
 
 def test_catalogue_runs_to_end_when_last_bookmark() -> None:

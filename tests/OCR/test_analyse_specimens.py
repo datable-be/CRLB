@@ -3,7 +3,7 @@
 import csv
 from pathlib import Path
 
-from analyse_specimens import analyse, compare, confusions, loosen, normalise
+from crlb.ocr.analyse_specimens import analyse, compare, confusions, loosen, normalise
 
 
 def test_normalise_joins_soft_hyphens_and_whitespace() -> None:
