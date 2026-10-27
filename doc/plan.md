@@ -6,7 +6,7 @@ How the steps below are built as software. The end result of the project is data
 
 ### Environment and reproducibility
 
-- **uv** manages Python and all Python dependencies. `uv.lock` pins every package version and hash; a `.python-version` file (`uv python pin 3.12`) pins the interpreter. All commands run as `uv run --locked …`, so an outdated lock file stops the run instead of being updated silently.
+- **uv** manages Python and all Python dependencies. `uv.lock` pins every package version and hash; a `.python-version` file (`uv python pin 3.14`) pins the interpreter at the minor version; patch releases (bug and security fixes) are picked up automatically. All commands run as `uv run --locked …`, so an outdated lock file stops the run instead of being updated silently.
 - **No container.** PyMuPDF ships with MuPDF built in and uv's Python builds include SQLite with FTS5, so there are no system libraries to install. A Dockerfile can be added on top of uv later if a deployment asks for it; it is not needed to reproduce the data.
 - **What uv does not pin** is recorded separately, because it affects results more than any Python package:
     - the model runtime (Ollama or llama.cpp server) and its version;
