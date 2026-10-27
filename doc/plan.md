@@ -283,11 +283,204 @@ Run locally (`make build_database`); the output is counts only.
 
 ### Out of scope for this step
 
-- OCR correction (space repair, `I`/`1` and the other confusions): a separate layer, see [OCR.md](OCR.md).
+- OCR correction (space repair, `I`/`1` and the other confusions): step 2.
 - Splitting the text into catalogue entries and extracting fields.
 - NER.
 - Re-OCR of the scans.
 - The validation interface.
+
+## Step 2: OCR correction
+
+### Goal
+
+Improve the text of the OCR documents (`text_source = 'ocr'`) as far as possible **without an LLM**, measure the result, and only consider LLM-assisted correction if the measured quality is not sufficient.
+
+The OCR quality test ([OCR.md](OCR.md)) showed that superfluous spaces are the main error: 1192 of 2009 errors on the specimens, with letter-spaced small-caps headings (`p r o v e n a n c e`) as a special case. Without the inserted spaces, CER drops from 1.4–9.2% to about 1.1–2.5% per file.
+
+### Approach
+
+The order is fixed:
+
+1. **Step 2a, space repair:** deterministic, only removes characters. Always done.
+2. **Measurement:** raw OCR against corrected OCR, against a quality threshold set beforehand.
+3. **Step 2b, character substitutions** (`I`/`1`, `s`/`f`, ...): deterministic, only if the measurement shows it is worth it.
+4. **Step 2c, LLM-assisted correction:** only if 2a and 2b together do not reach the threshold.
+
+### Principles
+
+- **Invariant of step 2a:** only whitespace and soft hyphens (`\xad`) are removed. With whitespace and soft hyphens stripped, the text of a page is identical before and after. The script checks this for every page and stops on a violation. "M useum" can become "Museum", never "Muse on".
+- **The raw layer is never changed.** Corrections are a separate layer that refers to `words.id`, so the coordinates stay available and every change can be traced and undone.
+- **Every change has a rule and a reason**, stored with it.
+- **When in doubt, do not change; flag.** A missed correction is cheaper than a wrong one, because a wrong one is invisible afterwards.
+- **No tuning on the test pages** (see "Measurement").
+
+### Lexicon
+
+The lexicon decides whether a joined form is a real word. It is built from the corpus itself, so it contains the vocabulary of the CRLB: names ("Rooses", "Ovid"), places, Latin and Dutch titles, abbreviations ("repr.", "Met.").
+
+Sources:
+
+- **Born-digital documents** (`text_source = 'born_digital'`, `excerpt_of IS NULL`): the main source. Their text is correct.
+- **The OCR document itself**: a word that occurs unsplit often enough in the same document (for example at least 5 times) is accepted as a joined form. This covers names that occur only in the old volumes. OCR tokens are only used to _accept_ a joined form, never to decide that a piece is a word, because a piece that is split the same way many times ("useum") would otherwise end up in the lexicon.
+
+Building:
+
+- Tokens are taken from `words.text`, NFC-normalised, with leading and trailing punctuation stripped and case folded (`casefold()`). The original case is kept in the output.
+- A word that ends a line with a soft hyphen is joined to the first word of the next line before counting. A word ending a line with a hard hyphen is not counted (it may be a compound: "Rubens-" + "House").
+- Tokens containing digits are not counted.
+- Besides word counts, **bigram counts** (two consecutive words on one line) are stored, to compare "a part" with "apart".
+
+Tables in `crlb.sqlite`:
+
+```sql
+CREATE TABLE lexicon (
+    form          TEXT PRIMARY KEY,   -- casefolded, NFC
+    born_digital  INTEGER NOT NULL,   -- count in born-digital documents
+    ocr           INTEGER NOT NULL    -- count in OCR documents (for statistics only)
+);
+
+CREATE TABLE bigrams (
+    first         TEXT NOT NULL,
+    second        TEXT NOT NULL,
+    born_digital  INTEGER NOT NULL,
+    PRIMARY KEY (first, second)
+);
+```
+
+The lexicon is rebuilt from scratch together with the correction; its options are recorded in the correction run.
+
+### Rules of step 2a
+
+The rules work per line, on the words of `words` in their stored order (`block_no`, `line_no`, `word_no`). A join always covers consecutive words. Tokens containing digits are never joined, because numbers (catalogue numbers, dimensions, dates) are data that must not change unnoticed.
+
+**R1, letter-spaced runs.** A run of 3 or more single-letter tokens on one line (`p r o v e n a n c e`) is joined if the result is in the born-digital lexicon (case-insensitive). If it is not, the run is flagged. Case is not changed: the OCR has lowercase where the print has small caps; restoring that is not a space correction.
+
+**R2, lexicon join.** For each window of 2 to 4 consecutive tokens on a line (longest window first, left to right), the tokens are joined if:
+
+- the joined form (without surrounding punctuation) is in the lexicon: born-digital count ≥ 1, or count in the same OCR document ≥ 5; and
+- at least one of the pieces is **not** a word: not in the born-digital lexicon, with single letters other than `a`, `A` and `I` counting as non-words ("M useum", "Mu seum", "Museu m").
+
+If all pieces are words ("a part", "in to", "may be"), the tokens are only joined if the joined form is clearly more frequent in the born-digital text than the bigram (for example 20 times as frequent, both counts from the born-digital lexicon). Otherwise the case is flagged.
+
+**R3, soft hyphen at line end.** A word that ends a line with `\xad` is joined to the first word of the next line in the same block. The soft hyphen is removed. Hard hyphens are never removed.
+
+**Gap between word boxes (to be investigated first).** A superfluous ABBYY space may be narrower than a real space on the same line. Before the rules are finalised, the gaps are measured on the development pages (see "Measurement"): the distribution of gaps at superfluous spaces against real spaces, relative to the font size (word box height). If the distributions separate well, a small gap becomes an extra condition for R2, or allows R2 when all pieces are words. If not, the gap is not used.
+
+The thresholds (minimum count in the same document, frequency ratio, maximum window, gap) are options of the script, recorded in the run, and tuned on the development pages only.
+
+### Schema of the correction layer
+
+```sql
+-- One row per correction run.
+CREATE TABLE correction_runs (
+    id           INTEGER PRIMARY KEY,
+    started_at   TEXT NOT NULL,     -- ISO 8601, UTC
+    step         TEXT NOT NULL,     -- '2a', later '2b', '2c'
+    based_on     INTEGER REFERENCES correction_runs(id),  -- NULL = raw layer
+    version      TEXT NOT NULL,     -- git commit of the scripts
+    options      TEXT NOT NULL      -- JSON: thresholds, lexicon options
+);
+
+-- The corrected text as a sequence of tokens. Every raw word of a corrected
+-- document belongs to exactly one token per run; unchanged words get a token
+-- with rule NULL, so the corrected page can be rebuilt from this table alone.
+CREATE TABLE corrected_words (
+    id             INTEGER PRIMARY KEY,
+    run_id         INTEGER NOT NULL REFERENCES correction_runs(id),
+    page_id        INTEGER NOT NULL REFERENCES pages(id),
+    first_word_id  INTEGER NOT NULL REFERENCES words(id),
+    last_word_id   INTEGER NOT NULL REFERENCES words(id),  -- = first_word_id if not joined
+    text           TEXT NOT NULL,
+    x0             REAL NOT NULL,   -- union of the boxes of the raw words
+    y0             REAL NOT NULL,
+    x1             REAL NOT NULL,
+    y1             REAL NOT NULL,
+    rule           TEXT,            -- 'R1', 'R2', 'R3' or NULL (unchanged)
+    reason         TEXT             -- e.g. 'pieces: M|useum; lexicon bd=412'
+);
+CREATE INDEX corrected_words_run_page ON corrected_words(run_id, page_id);
+
+-- Cases a rule considered but did not change.
+CREATE TABLE correction_flags (
+    id             INTEGER PRIMARY KEY,
+    run_id         INTEGER NOT NULL REFERENCES correction_runs(id),
+    page_id        INTEGER NOT NULL REFERENCES pages(id),
+    first_word_id  INTEGER NOT NULL REFERENCES words(id),
+    last_word_id   INTEGER NOT NULL REFERENCES words(id),
+    rule           TEXT NOT NULL,
+    candidate      TEXT NOT NULL,   -- the joined form that was not applied
+    reason         TEXT NOT NULL    -- e.g. 'all pieces are words; ratio 3.1 < 20'
+);
+```
+
+A join is a contiguous range of word ids, because words are stored in reading order and a join never crosses a block. The corrected page text is rebuilt from `corrected_words`: tokens joined by a space within a line, a newline between lines, an empty line between blocks. For a fair comparison, the raw page text is rebuilt from `words` in the same way.
+
+### Measurement
+
+**Ground truth.** The 12 hand-corrected specimen pages (6 files × 2 pages) are split once into a development set and a test set: per file one page each, chosen at random with a fixed seed and recorded in a file in git. Rules and thresholds are tuned on the 6 development pages only. The test pages are used once per version of the rules, for the final figures. If the test set turns out to be too small to decide, more pages are corrected by hand for it (not taken from the development set).
+
+**Metrics on the specimens** (with `analyse_specimens.py`, extended to compare a corrected text with the ground truth):
+
+- CER, CER loose and WER, raw and corrected;
+- CER with all whitespace removed: must be equal for raw and corrected (check of the invariant, apart from soft hyphens);
+- join precision: correct joins / all joins;
+- join recall: superfluous spaces removed / all superfluous spaces in the ground truth;
+- **errors introduced**: wrong joins. This is the most important number;
+- per rule (R1, R2, R3) and per file.
+
+**Metrics on the whole corpus** (no ground truth):
+
+- number of joins and flags per rule and per document;
+- the invariant holds for every page;
+- a random sample of joins (for example 200, with a fixed seed) and of flags is written to a CSV file with the pieces, the joined form and the page, for manual review by the user. The reviewed sample gives a precision estimate for the whole corpus. The script only prints counts; the CSV stays local.
+- Later, optionally: the indexes as ground truth. An index entry says that a name occurs on a page; the share of index terms that can be found on the referenced page, before and after correction, measures the improvement on exactly the terms that matter for NER. This needs index parsing, which is work in itself, so it is not part of the POC.
+
+**Threshold.** Before the test figures are looked at, the user sets what is "sufficient", for example:
+
+- CER on the test pages at most N%;
+- at most K wrong joins per 1000 joins in the reviewed sample;
+- (later) at least M% of index terms found.
+
+If the threshold is met, step 2 ends with 2a. Otherwise step 2b is considered first, then 2c.
+
+### Step 2b: character substitutions (conditional)
+
+Most of the remaining errors are substitutions: `I`→`1` (128 on the specimens), `o`→`0`, `s`→`f` and `s`→`S` (long s, case), `ct`→`d`, `rn`→`m`. A second deterministic pass can generate candidates from a substitution table derived from `confusions.csv` and accept a candidate only if the result is in the born-digital lexicon and the original is not.
+
+This is a different risk class from space repair: the characters themselves change, and `1`/`I` and `0`/`o` also occur in catalogue numbers, Roman numerals and dimensions. Tokens consisting mainly of digits or Roman numerals are therefore excluded. Step 2b is a separate run (`based_on` the 2a run), with its own measurement, and is only planned in detail if the 2a measurement asks for it.
+
+### Step 2c: LLM-assisted correction (only if needed)
+
+Only if 2a and 2b do not reach the threshold. Even then the LLM is constrained:
+
+- it chooses between candidates the script generates, or judges a flagged case (join or not), instead of rewriting text freely;
+- its output is checked against the same invariants (2a: only whitespace removed; 2b: only substitutions from the table);
+- model choice follows the project preference: local first, then an EU provider;
+- the model is listed in `README.md` under AI usage.
+
+### Code
+
+New directory `scripts/correction/`:
+
+- `build_lexicon.py`: fills `lexicon` and `bigrams` in `crlb.sqlite`.
+- `correct_spaces.py`: runs step 2a on all OCR documents (or a selection), writes `correction_runs`, `corrected_words` and `correction_flags`. Checks the invariant per page. Prints only counts.
+- `measure_gaps.py`: the gap investigation on the development pages; prints the distributions as counts and quantiles only.
+- `sample_joins.py`: writes the review sample to CSV.
+- `analyse_specimens.py` (existing, in `scripts/OCR/`): extended with an option to compare corrected text, and with join precision and recall.
+
+Project configuration as in step 1 (`pyproject.toml` paths, Makefile targets, `help`).
+
+### Tests
+
+`tests/correction/`, on small handmade token sequences and a small lexicon:
+
+- R1 joins `p r o v e n a n c e` and flags an unknown run;
+- R2 joins `M useum`, `Mu seum` and `Museu m`, keeps `a part` (flagged) unless the ratio condition holds, and never joins tokens with digits;
+- R3 joins across lines on a soft hyphen and never on a hard hyphen;
+- punctuation and case are kept (`M useum,` → `Museum,`);
+- the invariant check catches a deliberately wrong correction;
+- every raw word belongs to exactly one corrected token, and the rebuilt page text is right;
+- lexicon building: soft-hyphen joining, hard-hyphen skipping, no digit tokens, OCR tokens never count as pieces.
 
 ## Volumes without a PDF
 
