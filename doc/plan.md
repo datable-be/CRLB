@@ -443,7 +443,8 @@ CREATE TABLE correction_flags (
 -- The run that later steps and exports use, per step. Steps 2, 3 and 4 can
 -- each be run several times; older runs stay in the database for comparison.
 CREATE TABLE active_runs (
-    step     TEXT PRIMARY KEY,      -- '2' (correction), '3' (segmentation), '4:<field>' (extraction)
+    step     TEXT PRIMARY KEY,      -- '2' (correction), '3' (segmentation), '4:<field>' (extraction),
+                                    -- '5b' (linking), '5c' (named entities), '5d' (RKD comparison)
     run_id   INTEGER NOT NULL,      -- id in the run table of that step
     set_at   TEXT NOT NULL,         -- ISO 8601, UTC
     note     TEXT                   -- why this run was made active
@@ -656,6 +657,7 @@ The rules run in this order, each on the result of the previous one:
     - `literature`, `lit.:`, `exhibited`, `exh.:`: at `;` outside brackets (one reference each);
     - in the abbreviations/bibliography and exhibitions sections: one item per abbreviation with its full citation, recognised by the hanging-indent layout and the abbreviation pattern (author, short title, year; or place, year).
       The separator and the item pattern are part of the volume configuration, because the conventions changed over time (the 2015 bibliography rules apply from V (1), 2014).
+10. **Index entries.** In the index documents and index sections: one `item` per index entry (heading term with its page references), with sub-entries as child items, recognised by indentation and the page-reference pattern (`123`, `123–125`, `n. 12`, `Fig. 58`, `No. 22`); entries continuing in the next column or on the next page stay one item. Step 5 parses them into terms with page references.
 
 Patterns, label lists, style thresholds and furniture bands are kept in one configuration file per volume (`data_manifest/segmentation/<part>.toml`, in git), with shared defaults. Configurations are developed on a few pages and then checked on the whole volume.
 
@@ -727,7 +729,7 @@ Step 4 records **what the text says**, verbatim and in the structure of the RO m
 
 ### Target: Rubens Online records or RKDimages fields
 
-It is not yet decided whether Rubens Online will have its own records for collections, agents, auctions and exhibitions, or will link to the RKD. The existing manual registration is done in RKDimages (Adlib/Axiell), following the RKD manual (*Handleiding RKDdatabases*, in `doc/project/`, not in git), and the RO model carries an RKD mapping per property. Step 4 is therefore designed so that both targets can be served from the same rows: the verbatim values and the structure are the same, only the authority step (5) and the export differ.
+It is not yet decided whether Rubens Online will have its own records for collections, agents, auctions and exhibitions, or will link to the RKD. The existing manual registration is done in RKDimages (Adlib/Axiell), following the [RKD manual](<project/Handleiding_RKDdatabases (15).pdf>) (_Handleiding RKDdatabases_), and the RO model carries an RKD mapping per property. Step 4 is therefore designed so that both targets can be served from the same rows: the verbatim values and the structure are the same, only the authority step (5) and the export differ.
 
 What the RKD manual adds for step 4 and 5 (RKDimages, screens 1, 6, 7 and 8):
 
@@ -1047,7 +1049,7 @@ The selection is split once, with a fixed seed and recorded in git, into a **dev
 
 **How they are made.** Starting from an empty record costs most time; starting from a pre-filled one is faster but risks copying its mistakes. The procedure is therefore:
 
-1. A script pre-fills a reference record per entry from the RKD/Axiell export where it exists (mapped to the step 4 columns), otherwise from a rules-only extraction run. The source of each pre-filled value is marked.
+1. A script pre-fills a reference record per entry from the RKD/Axiell export (`rkd_records`, step 5a) where it exists (mapped to the step 4 columns), otherwise from a rules-only extraction run. The source of each pre-filled value is marked.
 2. The annotator checks every value against the PDF (with the review file of step 3: the PDF region next to the values), corrects, completes and removes, and marks the record as done. Every pre-filled value must be confirmed or changed; untouched values block the import.
 3. An import script checks the record (schema, list values, verbatim values occur in the entry text, positions consistent) and loads it into the database as a run with `method = 'reference'` (in `ro_runs`) and `status = 'accepted'`.
 
@@ -1125,6 +1127,316 @@ New dependencies, to be confirmed when the code is written: an HTTP client for t
 - Whether `unreviewed` rows may be exported.
 - How private owners named in the CRLB provenance are handled in an export, given the RKD rule that protected private collections are not shown publicly.
 - Who at the Rubenshuis makes the reference records, and how much time is available for them.
+
+## Step 5: normalisation, linking and enrichment
+
+### Goal
+
+Make the verbatim values of step 4 usable in Rubens Online or RKDimages: normalise them according to control lists and entry instructions, link them to authorities with a URI (linked open data), find named entities in the descriptive texts, and compare the result with what is already in RKD/Axiell, so that only what is missing or different is added. This covers the following parts of the offer:
+
+- "Op basis van beschikbare data in RKD/Axiell en registers uit de corpusdelen worden controlelijsten gemaakt";
+- "Component voor het normaliseren van geëxtraheerde gegevens op basis van controlelijsten en invoerinstructies";
+- "Component voor het verrijken van geëxtraheerde gegevens met een LOD URI";
+- "Op beschrijvende teksten wordt een verrijking uitgevoerd": named entities (for example mythological figures, place names) linked to the authorities of the data profile (for example Iconclass), using the indexes of the corpus;
+- from the kick-off: "wat zit er al in de databank, en enkel het ontbrekende vullen we aan".
+
+Step 5 never changes the step 4 rows. Its results are a separate layer of links and clusters that refer to them, with the same traceability (run, method, status) as the earlier steps.
+
+### Parts
+
+1. **5a, control lists:** gather the terms values can be linked to, from authorities, RKD/Axiell and the corpus indexes.
+2. **5b, linking:** link each value of step 4 to a term of a control list, and group values that denote the same thing.
+3. **5c, named entities in the descriptive texts:** find, classify and link entities in the paragraphs and notes.
+4. **5d, comparison with RKD/Axiell:** per work, what the CRLB adds to the existing record, and where they differ.
+
+### 5a: control lists
+
+| Kind                   | Source                                                                | Used for                                                                  |
+| :--------------------- | :-------------------------------------------------------------------- | :------------------------------------------------------------------------ |
+| artists                | RKDartists                                                            | attribution, makers of copies and prints, artists in texts                |
+| collections and owners | RKD validation list of collections (RKDimages _Herkomst 1_)           | holders, current locations                                                |
+| auctions               | RKD auction file (barcode, place, auction house, dates)               | provenance auctions                                                       |
+| exhibitions            | RKD exhibitions validation list                                       | exhibitions                                                               |
+| literature             | RKD citation abbreviations (RKDlibrary), Rubenianum library (Brocade) | literature references, abbreviation lists                                 |
+| places                 | Getty TGN                                                             | places of collections, auctions, exhibitions, production; places in texts |
+| concepts               | Getty AAT, and the RO value lists                                     | object names, support, materials, techniques, transfer methods            |
+| subjects               | Iconclass                                                             | depicted subjects, mythological and biblical figures in texts             |
+| general                | Wikidata                                                              | persons and places not in the above                                       |
+| corpus indexes         | the index documents and index sections of each part                   | names, places, collections and subjects with the pages where they occur   |
+
+Notes:
+
+- **The corpus indexes** are the most valuable list for this corpus: they are compiled by the authors, use the spellings of the text, and say on which (printed) pages each name occurs. They need their own segmentation in step 3 (index entries, sub-entries, page references; the index layout of each part goes into its configuration) and parsing into terms with page references here.
+- **External lists are cached locally** in the database, with their source and date of retrieval, and matching happens locally. This keeps runs reproducible, and avoids sending names from the text (including private owners) to outside services one by one. Where a service offers downloads or bulk queries (Getty and Wikidata SPARQL endpoints, Iconclass data), those are used to fetch relevant subsets (for example all TGN places in Europe, all RKDartists active 1550–1750).
+- **RKD data** comes either from an export of RKD/Axiell provided by the Rubenshuis or RKD, or from the RKD's public interfaces, whichever is available; to be agreed.
+
+```sql
+-- One row per term of a control list.
+CREATE TABLE control_terms (
+    id            INTEGER PRIMARY KEY,
+    vocabulary    TEXT NOT NULL,     -- 'rkdartists', 'rkd_collections', 'rkd_auctions', 'rkd_exhibitions',
+                                     -- 'rkd_citations', 'tgn', 'aat', 'iconclass', 'wikidata', 'crlb_index'
+    uri           TEXT,              -- NULL for corpus index terms without an authority
+    label         TEXT NOT NULL,     -- preferred label
+    alt_labels    TEXT,              -- JSON list of variant names and spellings
+    type          TEXT,              -- person, collection, place, concept, subject, auction, exhibition, source
+    extra         TEXT,              -- JSON: dates of life or activity, coordinates, broader terms, place of a collection, ...
+    source        TEXT NOT NULL,     -- where it was fetched from
+    retrieved_at  TEXT NOT NULL,
+    segment_id    INTEGER REFERENCES segments(id)  -- for corpus index terms: the index entry
+);
+CREATE INDEX control_terms_vocabulary_label ON control_terms(vocabulary, label);
+
+-- Page references of corpus index terms.
+CREATE TABLE index_references (
+    term_id       INTEGER NOT NULL REFERENCES control_terms(id),
+    part          TEXT NOT NULL REFERENCES parts(part),
+    printed_page  TEXT NOT NULL,     -- as printed in the index; resolved to pages through printed_pages
+    note_number   TEXT,              -- 'n. 12' in the index
+    entry_number  TEXT               -- if the index refers to catalogue numbers instead of pages
+);
+
+-- The RKD records themselves (export or interface), as fetched.
+CREATE TABLE rkd_records (
+    rkd_id        TEXT PRIMARY KEY,  -- RKDimages artwork number
+    data          TEXT NOT NULL,     -- the raw record as JSON (Adlib field names or interface format)
+    source        TEXT NOT NULL,     -- 'axiell export <date>', 'rkd interface', ...
+    retrieved_at  TEXT NOT NULL
+);
+```
+
+`rkd_records` is used twice: to pre-fill the reference records of step 4, and for the comparison in 5d. It is filled once per export and replaced as a whole when a newer export arrives.
+
+### 5b: linking
+
+For each value of step 4 that should point to an authority (holder, place, artist, auction, exhibition, abbreviation, object name, support, …):
+
+1. **Candidates** from the relevant control lists: exact match on label or variant after normalisation (case, accents, punctuation, word order `Last, First` against `First Last`, OCR-tolerant comparison for OCR volumes), then fuzzy matching.
+2. **Filters and scores** from the context: dates of life against the date of the provenance stage, the place of a collection against the place in the text, the auction house and date for an auction, the corpus index of the same part (a holder listed in the index of the part is strong evidence).
+3. **Decision:** a link is made automatically only if there is one candidate above the threshold and no close second. Otherwise the candidates are stored for review. An LLM may be used as a judge to choose between the candidates or decide "none of these", under the same constraint as in step 4: it can only return one of the given candidates.
+4. **Clusters:** values that denote the same thing across entries and parts ("Duarte Pinto Coehlo", "D. Pinto Coelho") are grouped, with or without an authority. A cluster is linked once, and the link applies to all its values. If Rubens Online gets its own records for collections, agents and auctions, the clusters are the starting point for them; if it links to RKD, a cluster without an RKD term is a candidate for a new RKD term.
+
+Specific cases:
+
+- **Literature:** the link is made per abbreviation of the abbreviation list (a few hundred per part), not per reference: `Jaffé, Catalogo, 1989` → RKD citation abbreviation `Jaffé 1989` and/or the Rubenianum library record. Every reference using that abbreviation inherits the link. This is a small, semi-manual task: automatic candidates, confirmed by a person.
+- **Auctions:** step 4 rows of different objects that describe the same sale (same auction house, place and date) are merged into one sale, and linked to the RKD auction file.
+- **Exhibitions:** an abbreviation with several venues (`Liverpool – London, 1998–99`) is split into one exhibition per venue, as RKD requires, and linked.
+- **Normalisation** follows the RKD entry instructions where a value is written out rather than linked: names as `Last, First`, unnamed owners as _Private collection_, unnamed dealers as _Art dealer_, amounts and currencies as in the RKD manual.
+- **Missing terms:** values with no term in RKD are collected in a request list in the format of the RKD manual (_Bijlage 2: Termen aanvragen voor validatielijsten_), so the Rubenshuis can request them from the RKD thesaurus instead of entering them one by one.
+
+```sql
+CREATE TABLE link_runs (
+    id                  INTEGER PRIMARY KEY,
+    started_at          TEXT NOT NULL,
+    part_of_step        TEXT NOT NULL,     -- '5b', '5c', '5d'
+    method              TEXT NOT NULL CHECK (method IN ('rules', 'llm', 'gliner', 'manual', 'reference')),
+    model               TEXT,
+    extraction_run_ids  TEXT NOT NULL,     -- JSON list of the ro_runs used
+    correction_run_id   INTEGER REFERENCES correction_runs(id),      -- text the mentions were found in (5c)
+    segmentation_run_id INTEGER REFERENCES segmentation_runs(id),    -- paragraphs and notes used (5c)
+    version             TEXT NOT NULL,
+    options             TEXT NOT NULL
+);
+
+-- A group of values (or entity mentions) that denote the same thing.
+CREATE TABLE clusters (
+    id           INTEGER PRIMARY KEY,
+    run_id       INTEGER NOT NULL REFERENCES link_runs(id),
+    type         TEXT NOT NULL,          -- person, collection, place, auction, exhibition, source, subject, ...
+    label        TEXT NOT NULL,          -- preferred form, from the authority or the most frequent value
+    term_id      INTEGER REFERENCES control_terms(id),  -- NULL = no authority found
+    status       TEXT NOT NULL DEFAULT 'unreviewed'
+);
+
+-- One row per linked value: which step 4 value, which cluster, how decided.
+CREATE TABLE value_links (
+    id            INTEGER PRIMARY KEY,
+    run_id        INTEGER NOT NULL REFERENCES link_runs(id),
+    table_name    TEXT NOT NULL,         -- e.g. 'ro_collection_stays'
+    row_id        INTEGER NOT NULL,
+    column_name   TEXT NOT NULL,         -- e.g. 'holder_text'
+    value_text    TEXT NOT NULL,         -- the verbatim value
+    cluster_id    INTEGER REFERENCES clusters(id),
+    score         REAL,
+    candidates    TEXT,                  -- JSON: candidate term ids with scores, for review
+    rule          TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'unreviewed'
+);
+CREATE INDEX value_links_row ON value_links(table_name, row_id);
+```
+
+The export of step 4 (`export_ro.py`) fills the `*_id` properties of the RO model from these links (through the cluster's term), for links with a status other than `rejected`.
+
+### 5c: named entities in the descriptive texts
+
+Approach as described in [NER.md](NER.md): structure first, then extraction with spans, then linking.
+
+- **Scope:** the paragraphs and notes of step 4 (`ro_text_paragraphs`, `ro_text_notes`). The structured fields are already covered by steps 4 and 5b.
+- **Entity types:** persons (artists, owners, historical and mythological figures), works (titles and cross-references such as `No. 15`), collections and institutions, places, dates, literature references (already resolved through the abbreviation lists), iconographic subjects.
+- **Order of methods**, as in the earlier steps:
+    1. **Gazetteer matching** with the control lists, above all the corpus index of the same part: a name from the index found on a page the index refers to is almost certainly a correct mention. Cross-references (`No. 15`, `Fig. 58`) and literature abbreviations by rules.
+    2. **A compact local model** (GLiNER or similar, runs on CPU) for the remaining mentions, with the entity types as labels.
+    3. **An LLM** only where 1 and 2 fall short, returning spans that are verified against the text.
+- **Linking** of the mentions through 5b (same clusters and control lists), with Iconclass for subjects and mythological and biblical figures.
+- **Role.** The same kind of entity plays different roles: in the text of a _Diana and Callisto_, "Diana" is a depicted subject, "Burchard" a scholar being cited, "Amalia van Solms" an owner, "Wildens" an artist working on the picture. Each mention gets a role relative to the work the text is about. The role is decided by rules where the context is clear (the title of the work, a provenance-like sentence, a literature reference) and otherwise by the model, as a choice from the list of roles.
+- **Targets.** A mention points to a cluster (persons, places, collections, subjects), to another work (cross-references such as `No. 15` → `ro_objects`) or to a source (a literature reference in the text → `ro_text_resources`).
+- **Aboutness.** Mentions with the role "depicted" (and the title of the work) are the evidence for the RO aboutness properties of the work: `represented_person`, `represented_place`, `represented_event`, `represented_type` and `subject`. These are recorded per work in `ro_subjects`, each with the mentions it is based on, and exported with the work.
+
+```sql
+CREATE TABLE entity_mentions (
+    id                INTEGER PRIMARY KEY,
+    run_id            INTEGER NOT NULL REFERENCES link_runs(id),
+    segment_id        INTEGER NOT NULL REFERENCES segments(id),   -- paragraph or note
+    first_word_id     INTEGER NOT NULL REFERENCES words(id),
+    last_word_id      INTEGER NOT NULL REFERENCES words(id),
+    text              TEXT NOT NULL,       -- verbatim (corrected text)
+    type              TEXT NOT NULL,       -- person, work, collection, place, date, source, subject
+    role              TEXT,                -- 'depicted', 'owner', 'artist', 'scholar', 'place_of_work', 'other'
+    object_id         INTEGER REFERENCES ro_objects(id),          -- the work the text is about
+    cluster_id        INTEGER REFERENCES clusters(id),            -- target: person, place, collection, subject, ...
+    target_object_id  INTEGER REFERENCES ro_objects(id),          -- target: another work ('No. 15')
+    target_source_id  INTEGER REFERENCES ro_text_resources(id),   -- target: a source (literature reference)
+    method            TEXT NOT NULL,       -- 'gazetteer', 'rules', 'gliner', 'llm'
+    rule              TEXT,                -- which rule or prompt decided type, role and target
+    score             REAL,
+    candidates        TEXT,                -- JSON: candidate targets with scores, for review
+    status            TEXT NOT NULL DEFAULT 'unreviewed'
+);
+CREATE INDEX entity_mentions_segment ON entity_mentions(segment_id);
+CREATE INDEX entity_mentions_object ON entity_mentions(object_id);
+
+-- RO aboutness of a work, derived from 'depicted' mentions and the title.
+CREATE TABLE ro_subjects (
+    id           INTEGER PRIMARY KEY,
+    run_id       INTEGER NOT NULL REFERENCES link_runs(id),
+    object_id    INTEGER NOT NULL REFERENCES ro_objects(id),
+    property     TEXT NOT NULL CHECK (property IN ('represented_person', 'represented_place',
+                                                   'represented_event', 'represented_type', 'subject')),
+    cluster_id   INTEGER REFERENCES clusters(id),   -- through its term: Iconclass, RKDartists, TGN, Wikidata, AAT
+    label        TEXT NOT NULL,
+    evidence     TEXT NOT NULL,                     -- JSON: entity_mentions ids, and 'title' if taken from the title
+    status       TEXT NOT NULL DEFAULT 'unreviewed'
+);
+CREATE INDEX ro_subjects_object ON ro_subjects(object_id);
+```
+
+Because mentions point to word ids, the validation tool can highlight them on the page, as for the OCR and the extracted fields. At most one of `cluster_id`, `target_object_id` and `target_source_id` is set per mention; none is set when the mention is found but not (yet) linked.
+
+### 5d: comparison with RKD/Axiell
+
+For each work with an RKD ID (from the RKD links in the PDFs, step 4 `ro_object_identifiers`), the step 4/5 data is compared with the existing RKDimages record, per property:
+
+- **same:** present in both and equal after normalisation;
+- **only in CRLB:** a candidate addition to RKD/Rubens Online;
+- **only in RKD:** information from other sources or later updates; kept, not touched;
+- **different:** both present but different (another date, another order of provenance, another attribution); for review by the Rubenshuis.
+
+Works without an RKD ID are matched to RKD records through title, collection, inventory number and dimensions, as candidates for review; unmatched works are candidates for new records.
+
+```sql
+CREATE TABLE rkd_comparison (
+    id             INTEGER PRIMARY KEY,
+    run_id         INTEGER NOT NULL REFERENCES link_runs(id),
+    object_id      INTEGER NOT NULL REFERENCES ro_objects(id),
+    rkd_id         TEXT,                -- NULL = no RKD record matched
+    property       TEXT NOT NULL,       -- RO property or group, e.g. 'provenance', 'exhibition_id'
+    crlb_value     TEXT,                -- JSON
+    rkd_value      TEXT,                -- JSON
+    verdict        TEXT NOT NULL CHECK (verdict IN ('same', 'only_crlb', 'only_rkd', 'different')),
+    status         TEXT NOT NULL DEFAULT 'unreviewed'
+);
+```
+
+The result is a report per part and per work: what can be added, and what needs a decision. Writing back to RKD/Axiell or the Rubens Online datahub is not part of this step; the export provides the data in the format agreed with the client.
+
+### Measurement
+
+- **Linking:** precision and recall of links against the authority columns of the reference records (step 4) where the annotators filled them in, and against links confirmed in review; share of values linked automatically, sent to review, and without candidates.
+- **Clusters:** share of clusters that combine values wrongly (checked on a sample) and share of values that should have been combined but were not.
+- **NER:** recall against the corpus indexes (share of index entries found on the referenced page), precision on a reviewed sample; per entity type and per role.
+- **Aboutness:** `ro_subjects` against the depicted subjects in the reference records, where the annotators filled them in.
+- **Comparison:** share of works matched to an RKD record; per property the distribution over same/only CRLB/only RKD/different.
+
+Thresholds per part are set by the user beforehand, as in steps 2 and 4.
+
+### Order of work
+
+1. Corpus indexes of the POC parts: segmentation (step 3) and parsing into `control_terms` and `index_references`.
+2. RKD data for the POC parts (export or interface), and the external lists needed for them (TGN, AAT subsets, Iconclass).
+3. Linking of the abbreviation lists (literature and exhibitions), confirmed by hand.
+4. Linking and clustering of holders, places, auctions and artists.
+5. NER on the descriptive texts of the POC parts, gazetteer first.
+6. Comparison with RKD for the works with an RKD ID.
+
+### Code
+
+New directory `scripts/enrichment/`:
+
+- `fetch_control_lists.py`: fetches and caches the external lists and the RKD data into `control_terms`; prints only counts.
+- `parse_indexes.py`: turns the index segments of step 3 into `control_terms` and `index_references`.
+- `link_values.py`: candidates, scoring, decisions and clusters for the step 4 values (5b).
+- `ner.py`: gazetteer matching, compact model and LLM fallback on the descriptive texts (5c), using `llm.py` from step 4.
+- `compare_rkd.py`: the comparison with RKD (5d), with a local report file.
+- `request_terms.py`: the list of missing terms in the RKD request format.
+- `review_links.py`: a local review file with the value, its context in the PDF and the candidates.
+
+New dependencies, to be confirmed when the code is written: a fuzzy matching library (rapidfuzz is already a dependency), a SPARQL or HTTP client for the external lists, and a compact NER model (GLiNER) if 5c needs it. Every model used is added to `README.md` under AI usage.
+
+### Tests
+
+`tests/enrichment/`, on small hand-made control lists and values:
+
+- name matching handles `Last, First` against `First Last`, accents and OCR errors, and does not link when two candidates score close together;
+- a candidate whose dates of life exclude the date of the provenance stage is filtered out;
+- an LLM judge answer outside the candidate list is rejected;
+- a literature abbreviation linked once applies to all references using it;
+- rows of different objects for the same sale are merged into one auction;
+- an exhibition abbreviation with two venues becomes two exhibitions;
+- index parsing gives terms with printed pages and resolves them to page ids;
+- an index term found on its referenced page is a gazetteer mention; the same term elsewhere needs more evidence;
+- a figure named in the title of the work gets the role `depicted` and ends up in `ro_subjects` with the mention as evidence; a cited author gets `scholar` and does not;
+- a cross-reference `No. 15` points to the right `ro_objects` row of the same part, and a mention never has more than one target;
+- the comparison gives `same`, `only_crlb`, `only_rkd` and `different` correctly for a small pair of records.
+
+### Out of scope for this step
+
+- Writing data into RKD/Axiell or the Rubens Online datahub.
+- The validation interface (side-by-side view of the PDF with highlighted OCR, segments, values and entities, with accept/correct actions). All steps are designed for it (word ids, coordinates, status columns), but it is not yet planned as a step.
+
+### Points to check first
+
+- How RKD data can be obtained: an export from Axiell (by the Rubenshuis or RKD), or the RKD's public interfaces; and under which conditions.
+- Which authority the RO model uses per property where several are possible (persons: RKDartists or Wikidata; places: TGN or RKD's geographic terms).
+- Licences and terms of use of the external lists when cached and redistributed (Iconclass, Getty, RKD).
+- Whether new terms should be requested from the RKD thesaurus, or Rubens Online keeps its own list.
+
+## Review and corrections (all steps)
+
+Every layer from step 2 on has a `status` column (`unreviewed`, `accepted`, `corrected`, `rejected`), and the rows of a layer are never changed after their run. A reviewer's decision, including a corrected value, is therefore stored separately, as an event:
+
+```sql
+-- One row per review decision, for any table with a status column.
+CREATE TABLE reviews (
+    id           INTEGER PRIMARY KEY,
+    table_name   TEXT NOT NULL,      -- e.g. 'segments', 'ro_collection_stays', 'value_links', 'entity_mentions'
+    row_id       INTEGER NOT NULL,
+    column_name  TEXT,               -- NULL = the row as a whole
+    action       TEXT NOT NULL CHECK (action IN ('accept', 'correct', 'reject', 'comment')),
+    old_value    TEXT,               -- the value at the time of review
+    new_value    TEXT,               -- for 'correct'
+    reviewer     TEXT NOT NULL,
+    reviewed_at  TEXT NOT NULL,      -- ISO 8601, UTC
+    comment      TEXT
+);
+CREATE INDEX reviews_row ON reviews(table_name, row_id);
+```
+
+Rules:
+
+- The `status` of a row follows from its latest review (`accept` → `accepted`, `correct` → `corrected`, `reject` → `rejected`); rows without a review are `unreviewed`. The review scripts and the validation tool write a review and update the `status` in the same transaction, so `status` stays a quick filter.
+- Exports and later steps use the **effective value**: the `new_value` of the latest `correct` review of that column, or otherwise the value in the row.
+- A rerun of a step produces new rows in a new run. Reviews of the old run are carried over to the new run where the row is unchanged (same source range, same values); the others are listed for review again.
+- Review decisions are the most expensive data in the project. `crlb.sqlite` is backed up before every run and every import, and `reviews` can be exported to a file on its own.
 
 ## Volumes without a PDF
 
