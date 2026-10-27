@@ -1079,6 +1079,31 @@ The pre-filled files are JSON per entry (readable in an editor, diffable), or a 
 
 **Threshold.** As in step 2, the user sets beforehand what is sufficient per field. Fields below the threshold move up the escalation path; fields above it stay local.
 
+### Entry export (Markdown)
+
+Besides the structured records, each catalogue entry is exported as a whole, as one Markdown file: the text of the entry for reading, publishing and reuse ("records per entry van corpusdeel"). The Markdown is an **export, generated from the database**; the entry itself is stored in the tables of steps 1–4 (segments, corrected text, typography, notes, word ids and coordinates). The export can therefore be regenerated at any time, and other formats (HTML, TEI, JSON-LD) can be added later from the same tables.
+
+Dialect: CommonMark with the GFM/Pandoc extensions for footnotes and YAML front matter, so the files can be converted with Pandoc and read by most tools.
+
+Content of one file:
+
+- **Front matter** (YAML): part, catalogue number, title, object type, RKD URI(s), document, PDF pages and printed pages, and the ids of the runs the file was generated from (correction, segmentation, extraction).
+- **Heading** of the entry, then the unlabelled fields (material and dimensions, location, date) as paragraphs.
+- **Labelled fields** as headings (`## Provenance`, `## Exhibited`, `## Copies`, `## Literature`, …), with list fields (provenance stages, references) as their text, and copies as a numbered list with their own `prov.:` and `lit.:` parts.
+- **Description** as paragraphs, numbered as suggested in "Analyses entries".
+- **Notes** as footnotes (`[^12]`), at the place of their marker (`note_refs`), with the note text at the end.
+- **Italics** from the font flags of step 1 (titles of works, locations, quotations); bold for the heading.
+- **Printed page breaks** as HTML comments (`<!-- p. 291 -->`), invisible when rendered but available for citation.
+
+Two versions per entry, following "Analyses entries":
+
+- **faithful:** the corrected text (step 2) as printed, with figure references and `Ibid.` as in the book;
+- **display:** for Rubens Online, with figure references removed and `Ibid.`/`op. cit.` written out (`text_display` of `ro_text_paragraphs` and `ro_text_notes`).
+
+Characters with a meaning in Markdown (`*`, `_`, `#`, `[`, `` ` ``, `<`) are escaped where they occur in the text; OCR note markers are often `*`.
+
+Files are written to `data/entries/<part>/<catalogue number>.md` and `…-display.md`, outside git (they contain the CRLB text). Entities and links to authorities (step 5) are not marked in the Markdown; they are available in the database and the JSON export.
+
 ### Order of work
 
 0. Annotation guide, selection and split of the reference entries; pre-filling and hand-checking of the development set.
@@ -1098,6 +1123,7 @@ New directory `scripts/extraction/`:
 - `vocabularies/`: the RO value lists used (Object names, Material_support, Attribution status, Transfer method, Collection Type, Currencies, Inscription Type, Source Types, Artistic relation types) as CSV with label and URI, and the CRLB-to-RO mapping tables.
 - `review_extraction.py`: writes a local review file per entry (the PDF region next to the extracted rows), never to the console.
 - `export_ro.py`: writes RO JSON records from the active runs.
+- `export_markdown.py`: writes the faithful and display Markdown file of each entry from the active runs.
 - `reference/prefill.py`: writes pre-filled reference records (JSON per entry) from the RKD/Axiell export or a rules run, to `data/reference/`.
 - `reference/import_reference.py`: checks hand-made reference records and loads them as a `reference` run.
 - `reference/selection.csv` (in git): the selected entries with their development/test assignment.
@@ -1118,7 +1144,9 @@ New dependencies, to be confirmed when the code is written: an HTTP client for t
 - `Ibid.` in a note is resolved to the previous note's citation, and figure references are removed from `text_display`;
 - the export produces RO property names and leaves out rejected rows;
 - the reference import rejects a record with a value that does not occur in the entry text, a value outside a list, or an unconfirmed pre-filled value;
-- the comparison aligns provenance stages by position and reports missing, extra and different stages.
+- the comparison aligns provenance stages by position and reports missing, extra and different stages;
+- the Markdown export of an entry has valid front matter, headings per field, footnotes at the place of their markers, italics from the font flags, page-break comments, and escaped `*` and `_`; Pandoc converts it without warnings;
+- the display version leaves out figure references and writes out `Ibid.`, the faithful version does not.
 
 ### Points to check first
 
