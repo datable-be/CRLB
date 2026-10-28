@@ -21,7 +21,7 @@ def configure(parser: argparse.ArgumentParser) -> None:
         "step", choices=sorted(RUN_TABLES), help="the step, e.g. 2 (correction)"
     )
     parser.add_argument(
-        "run_id", type=int, help="id of the run in the run table of the step"
+        "run_id", help="id of the run in the run table of the step, or 'latest'"
     )
     parser.add_argument("--note", help="why this run is made active")
     parser.set_defaults(func=run)
@@ -31,16 +31,24 @@ def run(args: argparse.Namespace) -> None:
     """Set the active run of a step after checking that the run exists."""
     conn = db.connect(args.db)
     table = RUN_TABLES[args.step]
-    if (
-        conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (args.run_id,)).fetchone()
-        is None
-    ):
-        raise SystemExit(f"no run {args.run_id} in {table}")
+    if args.run_id == "latest":
+        run_id = conn.execute(f"SELECT max(id) FROM {table}").fetchone()[0]
+        if run_id is None:
+            raise SystemExit(f"no run in {table} yet")
+    elif not args.run_id.isdigit():
+        raise SystemExit(f"run id must be a number or 'latest', not {args.run_id!r}")
+    else:
+        run_id = int(args.run_id)
+        if (
+            conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (run_id,)).fetchone()
+            is None
+        ):
+            raise SystemExit(f"no run {run_id} in {table}")
     conn.execute(
         "INSERT INTO active_runs (step, run_id, set_at, note) VALUES (?, ?, ?, ?)"
         " ON CONFLICT (step) DO UPDATE SET run_id = excluded.run_id, set_at = excluded.set_at, note = excluded.note",
-        (args.step, args.run_id, utc_now(), args.note),
+        (args.step, run_id, utc_now(), args.note),
     )
     conn.commit()
     conn.close()
-    print(f"step {args.step}: run {args.run_id} is active")
+    print(f"step {args.step}: run {run_id} is active")

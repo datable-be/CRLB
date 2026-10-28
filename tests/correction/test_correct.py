@@ -103,6 +103,17 @@ def test_set_active(
     assert [t.text for t in text.tokens(corrected_db, 1, 1)] == ["the"]
     with pytest.raises(SystemExit, match="no run 9"):
         main(["set-active", path, "2", "9"])
+    correct(corrected_db, Options())
+    main(["set-active", path, "2", "latest"])
+    assert text.active_run(corrected_db, "2") == 2
+
+
+def test_set_active_latest_needs_a_run(
+    corpus_db: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """'latest' is refused before any correction run exists."""
+    with pytest.raises(SystemExit, match="no run in correction_runs yet"):
+        main(["set-active", str(tmp_path / "out" / "crlb.sqlite"), "2", "latest"])
 
 
 def test_show_writes_a_side_by_side_page(

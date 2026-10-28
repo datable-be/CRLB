@@ -32,8 +32,13 @@ show_poc:
 	$(call header,Step 2: raw and corrected pages side by side)
 	$(call run,uv run --locked crlb correct show data/poc/crlb.sqlite 26_2_I_1 393)
 
-# All POC steps so far; making a run active stays a manual step after measuring and checking
+# All POC steps up to the acceptance of the correction run, which is a separate decision
 poc: build_poc lexicon_poc correct_poc measure_poc show_poc
 
+# The explicit decision after measuring and checking: later steps read the text of this run
+accept_poc:
+	$(call header,Step 2: accept the correction run)
+	$(call run,uv run --locked crlb set-active data/poc/crlb.sqlite 2 latest --note "accepted after measurement and review (POC)")
+
 help:
-	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, measure_poc, show_poc, poc"
+	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, measure_poc, show_poc, poc, accept_poc"
