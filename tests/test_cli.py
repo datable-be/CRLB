@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from crlb import set_active
 from crlb.cli import build_parser, main
+from crlb.correction import correct, lexicon, measure
 from crlb.database import build
 from crlb.ocr import analyse_specimens, sample_specimens
 
@@ -12,6 +14,20 @@ from crlb.ocr import analyse_specimens, sample_specimens
 def test_build_dispatches_to_its_module() -> None:
     """Check that the build command calls the run function of crlb.database.build."""
     assert build_parser().parse_args(["build", "m.csv", "out"]).func is build.run
+
+
+def test_step_2_commands_dispatch_to_their_modules() -> None:
+    """Check that lexicon, correct run, correct measure and set-active call their modules."""
+    parser = build_parser()
+    assert parser.parse_args(["lexicon", "db", "src.csv"]).func is lexicon.run
+    assert parser.parse_args(["correct", "run", "db"]).func is correct.run
+    args = parser.parse_args(["correct", "run", "db", "--sample", "XIX (4);II (1)"])
+    assert [item.part for item in args.sample] == ["XIX (4)", "II (1)"]
+    assert (
+        parser.parse_args(["correct", "measure", "db", "s", "x.csv"]).func
+        is measure.run
+    )
+    assert parser.parse_args(["set-active", "db", "2", "1"]).func is set_active.run
 
 
 def test_ocr_subcommands_dispatch_to_their_modules() -> None:

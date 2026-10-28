@@ -37,7 +37,7 @@ src/crlb/
 tests/                  one folder per subpackage, as now
 ```
 
-- **CLI:** `crlb <command>`, declared in `pyproject.toml` under `[project.scripts]`. Examples: `crlb list-pdfs`, `crlb build`, `crlb correct`, `crlb segment`, `crlb extract provenance`, `crlb normalise`, `crlb export markdown`, `crlb set-active <step> <run>`, `crlb ocr sample`. `crlb --help` lists them all. Only the standard library (`argparse`) is used for the CLI.
+- **CLI:** `crlb <command>`, declared in `pyproject.toml` under `[project.scripts]`. Examples: `crlb list-pdfs`, `crlb build`, `crlb lexicon`, `crlb correct run`, `crlb segment`, `crlb extract provenance`, `crlb normalise`, `crlb export markdown`, `crlb set-active <step> <run>`, `crlb ocr sample`. `crlb --help` lists them all. Only the standard library (`argparse`) is used for the CLI.
 - **Makefile** targets call the CLI (`uv run --locked crlb build data_manifest/documents.csv data`), so the usual `make <target>` workflow stays, and `make help` lists the targets.
 - **Shared code** lives once in the core modules: opening the database and the PDFs (`db.py`, with `open_pdf` checking the hash), run bookkeeping (`runs.py`), the effective text (`text.py`), the LLM interface (`llm.py`, used by steps 2c, 4 and 5) and reviews (`review.py`).
 - **Tests** import `crlb` as an installed package; the per-folder `pythonpath`, ruff `src` and ty `extra-paths` settings are no longer needed. The OCR quality test lives in `crlb.ocr` (`crlb ocr sample`, `crlb ocr analyse`); `scripts/archive` holds earlier scripts, kept as they are and excluded from ruff and ty.
@@ -99,8 +99,8 @@ A run becomes active only by an explicit command (`crlb set-active`), after its 
 
 Before the whole corpus, every step is run on two catalogue entries: one from XIX (4) (born-digital, `CRLB_19_4_links RKD Research.pdf`) and one from II part 1 (ABBYY, `CRLB_02_1_links`). Each step gets its most important parts; the code is the same as for the full corpus, which only needs a longer manifest and more configuration.
 
-1. **Step 1:** the manifest lists only the two POC PDFs (`make build_poc`, about 15 seconds).
-2. **Step 2a** on the two documents: rules R1–R3, the effective text (`crlb.text`) and `crlb set-active`; the lexicon comes from the born-digital POC document only.
+1. **Step 1:** the manifest lists the two POC PDFs and the OCR files used for measurement (`make build_poc`, about 50 seconds).
+2. **Step 2a** on the two documents: rules R1–R3, the effective text (`crlb.text`) and `crlb set-active`. The lexicon is built from all 31 born-digital volumes, read directly from the PDFs (`data_manifest/lexicon_sources.csv`, about 80 seconds): it covers 96.9% of the ground-truth tokens of the II (1) specimens, against 79.1% for XIX (4) alone. Left out of the POC: the gap investigation, the review sample, steps 2b and 2c. Besides the two POC documents, the manifest contains the other OCR files with hand-corrected specimens (II index, XIX (2) and its index, XXVI (2.1) and its index), only for measurement on all 12 specimen pages (6 development, 6 test). `make poc` runs steps 1 and 2a, the measurement and the side-by-side view of XXVI (2.1) p. 393.
 3. **Step 3** on the two documents in full, since entries are found by segmenting them; the two entries are chosen here.
 4. **Step 4** for the two entries: rules for the object core, literature and exhibitions; provenance with one local LLM; a hand-made reference record per entry; the Markdown export.
 5. **Step 5**, minimal: normalisation, one LOD lookup and the RKD comparison if the export is available; the index PDFs are added to the manifest for the control lists.
@@ -460,7 +460,7 @@ Sources:
 Building:
 
 - Tokens are taken from `words.text`, NFC-normalised, with leading and trailing punctuation stripped and case folded (`casefold()`). The original case is kept in the output.
-- A word that ends a line with a soft hyphen is joined to the first word of the next line before counting. A word ending a line with a hard hyphen is not counted (it may be a compound: "Rubens-" + "House").
+- A word that ends a line with a soft hyphen is joined to the first word of the next line before counting. A word ending a line with a hard hyphen is not counted, and neither is the word that continues it on the next line: either half may be a fragment ("com-" + "pany") or part of a compound ("Rubens-" + "House"). Counting the second half made fragments such as `pany` and `ture` lexicon forms, which R2 then used for wrong joins (`pan y` → `pany`).
 - Tokens containing digits are not counted.
 - Besides word counts, **bigram counts** (two consecutive words on one line) are stored, to compare "a part" with "apart".
 
@@ -481,26 +481,45 @@ CREATE TABLE bigrams (
 );
 ```
 
-The lexicon is rebuilt from scratch together with the correction; its options are recorded in the correction run.
+The born-digital sources are read directly from the PDFs listed in `data_manifest/lexicon_sources.csv` (one file per volume, the `_links` version where there is one), so they need not be built in step 1; their path, SHA-256 and counts are stored in `lexicon_sources`:
+
+```sql
+CREATE TABLE lexicon_sources (
+    path      TEXT PRIMARY KEY,
+    sha256    TEXT NOT NULL,
+    pages     INTEGER NOT NULL,
+    words     INTEGER NOT NULL,
+    built_at  TEXT NOT NULL
+);
+```
+
+Only bigrams whose two words joined are a lexicon form are stored, since only those are compared ("a part" against "apart"). `crlb lexicon` replaces the lexicon completely; a summary (sources, forms, bigrams) is recorded in the options of each correction run.
 
 ### Rules of step 2a
 
 The rules work per line, on the words of `words` in their stored order (`block_no`, `line_no`, `word_no`). A join always covers consecutive words. Tokens containing digits are never joined, because numbers (catalogue numbers, dimensions, dates) are data that must not change unnoticed.
 
-**R1, letter-spaced runs.** A run of 3 or more single-letter tokens on one line (`p r o v e n a n c e`) is joined if the result is in the born-digital lexicon (case-insensitive). If it is not, the run is flagged. Case is not changed: the OCR has lowercase where the print has small caps; restoring that is not a space correction.
+**R1, letter-spaced runs.** ABBYY splits letter-spaced and small-caps headings into pieces of 1 to 3 letters (`p r o v e n a n c e`, `C o p ie s:`, `L ite r a tu r e:`). In a run of such short pieces on one line, the longest stretch of 3 or more pieces with at least 2 single letters whose join is in the born-digital lexicon (case-insensitive) is joined, and the rest of the run on either side is treated the same way. A run with 3 or more single letters and no such stretch is flagged. Single letters only (the first version) left fragments that R2 then joined wrongly (`Cop ies`, `Litera ture:`). Case is not changed: the OCR has lowercase where the print has small caps; restoring that is not a space correction.
 
 **R2, lexicon join.** For each window of 2 to 4 consecutive tokens on a line (longest window first, left to right), the tokens are joined if:
 
 - the joined form (without surrounding punctuation) is in the lexicon: born-digital count ≥ 1, or count in the same OCR document ≥ 5; and
 - at least one of the pieces is **not** a word: not in the born-digital lexicon, with single letters other than `a`, `A` and `I` counting as non-words ("M useum", "Mu seum", "Museu m").
 
-If all pieces are words ("a part", "in to", "may be"), the tokens are only joined if the joined form is clearly more frequent in the born-digital text than the bigram (for example 20 times as frequent, both counts from the born-digital lexicon). Otherwise the case is flagged.
+If all pieces are words ("a part", "in to", "put to"), the tokens are never joined, only flagged, with the bigram count in the reason for review. A frequency ratio (join if the joined form is 20 times as frequent as the bigram) was tried and joined `put to flight` into `putto flight`: in an art-historical corpus a joined form is often a real word too.
 
-**R3, soft hyphen at line end.** A word that ends a line with `\xad` is joined to the first word of the next line in the same block. The soft hyphen is removed. Hard hyphens are never removed. R3 is the only rule that also runs on born-digital documents.
+**Implausible joins.** R1 and R2 refuse a join, and flag it, when:
+
+- a single letter follows a word ("the E lder" → "theE", "de C rayer" → "deC", "the m useum" → "them"): the letter starts the next word, which R2 then joins ("Elder", "Crayer", "museum");
+- the join ends in a word and occurs fewer than 2 times in the born-digital text ("o f the" → "ofthe", a typo found once; option `--min-count-word-end`).
+
+On the 12 specimen pages this lowered the wrongly removed spaces from 24 to 13 (development) and from 27 to 18 (test), at the cost of about 20 more superfluous spaces left per set. Two other changes were measured and not kept: ignoring initials in the lookup ("J.B rueghel" → "J.Brueghel") doubled the wrong joins again, and allowing R1 stretches of 2 pieces ("T he", "o f") left more spaces without fewer errors. The remaining errors depend on context and are a case for step 2c.
+
+**R3, soft hyphen at line end.** A word that ends a line with `\xad` is joined to the first word of the next line in the same block, or of the next block if that word starts in lowercase; otherwise the case is flagged. ABBYY puts most lines in a block of their own (1.2 lines per block in II (1), against 4.9 in XIX (4)): of the 387 soft hyphens at line end in II (1), 305 are followed by a new block, 297 of them starting in lowercase. The lexicon joins soft-hyphenated words in the same way. The soft hyphen is removed. Hard hyphens are never removed. R3 is the only rule that also runs on born-digital documents.
 
 **Gap between word boxes (to be investigated first).** A superfluous ABBYY space may be narrower than a real space on the same line. Before the rules are finalised, the gaps are measured on the development pages (see "Measurement"): the distribution of gaps at superfluous spaces against real spaces, relative to the font size (word box height). If the distributions separate well, a small gap becomes an extra condition for R2, or allows R2 when all pieces are words. If not, the gap is not used.
 
-The thresholds (minimum count in the same document, frequency ratio, maximum window, gap) are options of the script, recorded in the run, and tuned on the development pages only.
+The thresholds (minimum count in the same document, maximum window, minimum count of a join ending in a word, gap) are options of the script, recorded in the run, and tuned on the development pages only.
 
 ### Schema of the correction layer
 
@@ -544,7 +563,7 @@ CREATE TABLE correction_flags (
     last_word_id   INTEGER NOT NULL REFERENCES words(id),
     rule           TEXT NOT NULL,
     candidate      TEXT NOT NULL,   -- the joined form that was not applied
-    reason         TEXT NOT NULL    -- e.g. 'all pieces are words; ratio 3.1 < 20'
+    reason         TEXT NOT NULL    -- e.g. 'all 2 pieces are words; bd=40; doc=3; bigram=30'
 );
 ```
 
@@ -554,13 +573,14 @@ A join is a contiguous range of word ids, because words are stored in reading or
 
 **Ground truth.** The 12 hand-corrected specimen pages (6 files × 2 pages) are split once into a development set and a test set: per file one page each, chosen at random with a fixed seed and recorded in a file in git. Rules and thresholds are tuned on the 6 development pages only. The test pages are used once per version of the rules, for the final figures. If the test set turns out to be too small to decide, more pages are corrected by hand for it (not taken from the development set).
 
-**Metrics on the specimens** (with `crlb ocr analyse`, extended to compare a corrected text with the ground truth):
+**Metrics on the specimens** (with `crlb correct measure`, which reuses the comparison of `crlb ocr analyse` on the raw and corrected page text from the database):
 
 - CER, CER loose and WER, raw and corrected;
 - CER with all whitespace removed: must be equal for raw and corrected (check of the invariant, apart from soft hyphens);
 - join precision: correct joins / all joins;
 - join recall: superfluous spaces removed / all superfluous spaces in the ground truth;
 - **errors introduced**: wrong joins. This is the most important number;
+- in the POC, recall and errors are counted on spaces, from the edit operations against the ground truth: superfluous spaces left (raw and corrected), and ground-truth spaces wrongly removed;
 - per rule (R1, R2, R3) and per file.
 
 **Metrics on the whole corpus** (no ground truth):
@@ -599,23 +619,25 @@ A candidate for comparison is the OCR-correction model tried earlier on CRLB tex
 
 Subpackage `crlb.correction`, schema `02_correction.sql`:
 
-- `crlb lexicon`: fills `lexicon` and `bigrams`.
-- `crlb correct`: runs step 2a on all OCR documents (or a selection) and R3 on the born-digital documents, writes `correction_runs`, `corrected_words` and `correction_flags`. Checks the invariant per page. Prints only counts.
-- `crlb correct measure-gaps`: the gap investigation on the development pages; prints the distributions as counts and quantiles only.
-- `crlb correct sample`: writes the review sample to CSV in `data/`.
+- `crlb lexicon <db> <sources>`: fills `lexicon`, `bigrams` and `lexicon_sources`.
+- `crlb correct run <db> [--sample]`: runs step 2a on all OCR documents (or a selection) and R3 on the born-digital documents, writes `correction_runs`, `corrected_words` and `correction_flags`. Checks the invariant per page. Prints only counts.
+- `crlb correct measure <db> <specimens> <split>`: the specimen metrics above, per specimen, with the development/test split of `data_manifest/specimen_split.csv`.
+- `crlb correct show <db> <document> <page>…`: writes an HTML page per requested page to `review/` next to the database, with the raw and corrected text side by side, the joins coloured by rule, the flags underlined and a table of all changes; for checking a run before `crlb set-active`. Prints only file names and counts.
+- `crlb correct measure-gaps` (after the POC): the gap investigation on the development pages; prints the distributions as counts and quantiles only.
+- `crlb correct sample` (after the POC): writes the review sample to CSV in `data/`.
 - `crlb ocr analyse` (the existing specimen analysis, moved into `crlb.ocr`): extended with an option to compare corrected text, and with join precision and recall.
 
 ### Tests
 
 `tests/correction/`, on small handmade token sequences and a small lexicon:
 
-- R1 joins `p r o v e n a n c e` and flags an unknown run;
-- R2 joins `M useum`, `Mu seum` and `Museu m`, keeps `a part` (flagged) unless the ratio condition holds, and never joins tokens with digits;
+- R1 joins `p r o v e n a n c e`, `C o p ie s:` and `L ite r a tu r e:`, and flags an unknown run;
+- R2 joins `M useum`, `Mu seum` and `Museu m`, keeps (and flags) `a part` and `put to`, keeps `pan y vino`, and never joins tokens with digits;
 - R3 joins across lines on a soft hyphen and never on a hard hyphen;
 - punctuation and case are kept (`M useum,` → `Museum,`);
 - the invariant check catches a deliberately wrong correction;
 - every raw word belongs to exactly one corrected token, and the rebuilt page text is right;
-- lexicon building: soft-hyphen joining, hard-hyphen skipping, no digit tokens, OCR tokens never count as pieces.
+- lexicon building: soft-hyphen joining, hard-hyphen skipping (both halves), no digit tokens, OCR tokens never count as pieces.
 
 ## Step 3: segmentation
 
