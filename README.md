@@ -35,6 +35,31 @@ This project turns the volumes of the **Corpus Rubenianum Ludwig Burchard** (CRL
 
 The code and documentation are published under the MIT licence; everything in the repository is in English.
 
+## Database
+
+`crlb build` writes two SQLite files to the output directory (`data/poc/` for the proof of concept). Both contain CRLB material and stay outside git.
+
+- **`crlb.sqlite`** holds the text and all later layers. Its schema is in `src/crlb/schema/`, one numbered SQL file per step. Opening the database applies the files that are missing.
+- **`pdfs.sqlite`** holds the PDF files themselves, in the standard [sqlar](https://sqlite.org/sqlar.html) format (`sqlite3 pdfs.sqlite -Atv` lists them). `crlb.sqlite` refers to each file by path and SHA-256, and the hash is checked whenever a PDF is opened from the archive.
+
+The tables of `crlb.sqlite`:
+
+| Table            | Contains                                                                                                                              | Used for                                                                                                          |
+| :--------------- | :------------------------------------------------------------------------------------------------------------------------------------ | :---------------------------------------------------------------------------------------------------------------- |
+| `schema_version` | the schema files applied, with their dates                                                                                            | upgrading an existing database without rebuilding it                                                              |
+| `build_runs`     | one row per build: time, git commit, PyMuPDF version and extraction options                                                           | provenance: which code and settings produced the text                                                             |
+| `parts`          | one row per CRLB part (`XIX (4)`), with title, year and authors from `data_manifest/parts.csv`                                        | citations and Rubens Online; the valid part names for `documents`                                                 |
+| `documents`      | one row per PDF: path, hash, size, part, volume, section (main or index), text source (OCR or born-digital), PDF metadata, page count | the unit of storage; selecting files by part or text source                                                       |
+| `pages`          | one row per page: index, page label, size, rotation and the raw page text                                                             | reading and searching the text of a page                                                                          |
+| `words`          | one row per word: position in block, line and word, coordinates, text, and font, size and style flags (bold, italic, superscript)     | the base of every later step; later layers refer to `words.id`, so every result traces back to a place in the PDF |
+| `links`          | link annotations: kind, URI or target page, and their box on the page                                                                 | RKDimages links, which mark catalogue entries and carry their RKD permalink; internal links                       |
+| `toc`            | the bookmarks (outline): level, title and target page                                                                                 | finding sections such as the catalogue and the index                                                              |
+| `pages_fts`      | a full-text index (FTS5) on `pages.text`, insensitive to case and accents. The `pages_fts_*` tables are its internal storage          | fast word, phrase and proximity searches across the corpus                                                        |
+| `active_runs`    | per step, the run that later steps and exports use (empty until step 2)                                                               | choosing between several runs of a step after measuring them                                                      |
+| `llm_calls`      | every language-model call: task, input range, input, output, validity, duration and tokens (empty until a step uses a model)          | auditing and comparing models without calling them again                                                          |
+
+The step 1 tables are never changed after the build. Later steps add their own tables, which refer to `words`, `pages` and `documents`.
+
 ## AI usage
 
 - In development:
