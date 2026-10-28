@@ -5,7 +5,13 @@ from pathlib import Path
 import pytest
 
 from crlb.cli import build_parser, main
+from crlb.database import build
 from crlb.ocr import analyse_specimens, sample_specimens
+
+
+def test_build_dispatches_to_its_module() -> None:
+    """Check that the build command calls the run function of crlb.database.build."""
+    assert build_parser().parse_args(["build", "m.csv", "out"]).func is build.run
 
 
 def test_ocr_subcommands_dispatch_to_their_modules() -> None:

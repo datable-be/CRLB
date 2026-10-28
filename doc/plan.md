@@ -41,11 +41,12 @@ tests/                  one folder per subpackage, as now
 - **Makefile** targets call the CLI (`uv run --locked crlb build data_manifest/documents.csv data`), so the usual `make <target>` workflow stays, and `make help` lists the targets.
 - **Shared code** lives once in the core modules: opening the database and the PDFs (`db.py`, with `open_pdf` checking the hash), run bookkeeping (`runs.py`), the effective text (`text.py`), the LLM interface (`llm.py`, used by steps 2c, 4 and 5) and reviews (`review.py`).
 - **Tests** import `crlb` as an installed package; the per-folder `pythonpath`, ruff `src` and ty `extra-paths` settings are no longer needed. The OCR quality test lives in `crlb.ocr` (`crlb ocr sample`, `crlb ocr analyse`); `scripts/archive` holds earlier scripts, kept as they are and excluded from ruff and ty.
+- **Selection with `--sample`.** Commands of steps 2–5 take `--sample "XIX (4)/22;II (1)/45"`: `;`-separated items, each a part with an optional catalogue number (a part alone means the whole part). Each step maps the sample to its own unit: the documents of the sampled parts for steps 2 and 3, the entries for steps 4 and 5. The parser lives in `crlb/sample.py`, and the sample is stored in the `options` of the run, so every run records what it covered. Step 1 has no `--sample`: its manifest is the selection.
 - **Conventions** for every command: type annotations and a one-line docstring on every function; ruff, ruff format and ty clean; the console only shows counts, checks and warnings, never CRLB text; anything with CRLB text (review files, samples, exports) is written to `data/`.
 
 ### Database schema and versions
 
-The database grows step by step: each step adds its tables. The schema is kept as one SQL file per step in `src/crlb/schema/` (`01_text.sql`, `02_correction.sql`, `03_segmentation.sql`, `04_extraction.sql`, `05_enrichment.sql`, `06_review.sql`, and later changes as further numbered files). A table `schema_version` records which files have been applied; `crlb` applies missing files in order when it opens the database. This way a later step never requires rebuilding the database from scratch. `pdfs.sqlite` has only the sqlar table.
+The database grows step by step: each step adds its tables. The schema is kept as one SQL file per step in `src/crlb/schema/` (`01_text.sql`, which also holds the shared tables below, `02_correction.sql`, `03_segmentation.sql`, `04_extraction.sql`, `05_enrichment.sql`, `06_review.sql`, and later changes as further numbered files). A table `schema_version` records which files have been applied; `crlb` applies missing files in order when it opens the database. This way a later step never requires rebuilding the database from scratch. `pdfs.sqlite` has only the sqlar table (`schema/pdfs.sql`).
 
 ### Effective text
 
@@ -94,6 +95,16 @@ CREATE TABLE llm_calls (
 ```
 
 A run becomes active only by an explicit command (`crlb set-active`), after its measurement, never automatically. For step 2 the active run is the last run of a chain (`based_on`), for example the 2b run built on the 2a run. Reviews and corrections are described in "Review and corrections (all steps)".
+## Proof of concept
+
+Before the whole corpus, every step is run on two catalogue entries: one from XIX (4) (born-digital, `CRLB_19_4_links RKD Research.pdf`) and one from II part 1 (ABBYY, `CRLB_02_1_links`). Each step gets its most important parts; the code is the same as for the full corpus, which only needs a longer manifest and more configuration.
+
+1. **Step 1:** the manifest lists only the two POC PDFs (`make build_poc`, about 15 seconds).
+2. **Step 2a** on the two documents: rules R1–R3, the effective text (`crlb.text`) and `crlb set-active`; the lexicon comes from the born-digital POC document only.
+3. **Step 3** on the two documents in full, since entries are found by segmenting them; the two entries are chosen here.
+4. **Step 4** for the two entries: rules for the object core, literature and exhibitions; provenance with one local LLM; a hand-made reference record per entry; the Markdown export.
+5. **Step 5**, minimal: normalisation, one LOD lookup and the RKD comparison if the export is available; the index PDFs are added to the manifest for the control lists.
+
 ## Step 1: text database
 
 ### Goal
@@ -218,6 +229,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE build_runs (
     id            INTEGER PRIMARY KEY,
     started_at    TEXT NOT NULL,      -- ISO 8601, UTC
+    git_commit    TEXT,               -- commit of the code, '-dirty' if the tree had changes
     tool          TEXT NOT NULL,      -- 'pymupdf'
     tool_version  TEXT NOT NULL,      -- pymupdf.__version__ / MuPDF version
     options       TEXT NOT NULL       -- JSON: extraction flags and settings
@@ -245,7 +257,7 @@ CREATE TABLE documents (
     excerpt_of     INTEGER REFERENCES documents(id),
     derived_from   INTEGER REFERENCES documents(id),  -- PDF copies made by the project (step 5f)
     note           TEXT,                   -- from the manifest
-    pdf_version    TEXT,                   -- e.g. 'PDF-1.4'
+    pdf_version    TEXT,                   -- PDF metadata 'format', e.g. 'PDF 1.4'
     title          TEXT,                   -- PDF metadata, verbatim
     producer       TEXT,
     creator        TEXT,
@@ -335,7 +347,7 @@ Notes on the schema:
 For each document, in manifest order:
 
 1. Stream the file into `pdfs.sqlite` (incremental blob I/O), computing SHA-256 and size on the way.
-2. Open the PDF with PyMuPDF from the same path and verify that its hash is unchanged since step 1, so the text comes from exactly the stored file.
+2. Open the PDF with PyMuPDF from the stored bytes, after checking them against the hash, so the text comes from exactly the stored file.
 3. Insert the `documents` row with manifest fields and PDF metadata.
 4. Insert the `toc` rows from `doc.get_toc(simple=True)` (PyMuPDF page numbers are 1-based, -1 for none; store 0-based, NULL for none).
 5. For each page:
@@ -352,7 +364,7 @@ Extraction settings, also recorded in `build_runs.options`:
 - Default text flags, **without** `TEXT_DEHYPHENATE`: soft hyphens (`\xad`) and line-end hyphens stay as they are.
 - No normalisation (no NFC, no whitespace collapsing). That belongs to later steps.
 
-Typography per word. `get_text("words")` gives no font information, so it is added from `page.get_text("dict", sort=False)` with the same flags. The `block_no` and `line_no` of a word refer to the same block and line in the `dict` output; within that line, the word gets the font, size and flags of the span that covers most of its characters (by bounding-box overlap), and `styles` counts how many different spans it overlaps. Typography is the main signal for segmentation (step 3): bold headings, notes in a smaller size, superscript note markers, italic locations and titles, and small caps, which ABBYY records as a capital in a larger size followed by letters in a smaller size (`P rov en a n ce`: 10.5 pt and 8.4 pt).
+Typography per word. `get_text("words")` gives no font information, so it is added from `page.get_text("rawdict", sort=False)`. All extractions of a page use one text page (`page.get_textpage(flags)`), so the `block_no` and `line_no` of a word refer to its line in the `rawdict` output (checked on the POC documents: no mismatches in 294,000 words). Within that line, a character belongs to the word when its centre lies inside the word's box; the word gets the font, size and flags of the span with most of its characters, and `styles` counts the distinct styles among them. Typography is the main signal for segmentation (step 3): bold headings, notes in a smaller size, superscript note markers, italic locations and titles, and small caps, which ABBYY records as a capital in a larger size followed by letters in a smaller size (`P rov en a n ce`: 10.5 pt and 8.4 pt).
 
 Expected size of `crlb.sqlite`: on the order of 20,000 pages and several million words, so probably 1–2 GB, mostly `words`. The exact number will be clear after the first build.
 
@@ -361,15 +373,15 @@ Expected size of `crlb.sqlite`: on the order of 20,000 pages and several million
 Subpackage `crlb.database` (see "Implementation"):
 
 - `src/crlb/schema/01_text.sql`: the schema of `crlb.sqlite` above; the sqlar table of `pdfs.sqlite`.
-- `crlb list-pdfs <dir>…`: lists candidate PDFs with page count, metadata, link and bookmark counts and the proposed `text_source`, as a starting point for the manifest. Prints no PDF text.
+- `crlb list-pdfs <dir>…` (after the POC, for the full manifest): lists candidate PDFs with page count, metadata, link and bookmark counts and the proposed `text_source`, as a starting point for the manifest. Prints no PDF text.
 - `crlb build <manifest> <out_dir>`:
     - creates `<out_dir>/crlb.sqlite` and `<out_dir>/pdfs.sqlite`;
     - refuses to run if either file exists (same behaviour as the specimen sampling);
     - prints only counts per document (pages, words, links per kind, bookmarks) and warnings, never PDF text;
-    - functions roughly: `read_manifest`, `create_databases`, `store_pdf`, `insert_document`, `insert_toc`, `insert_page`, `build`.
-- `crlb.db.open_pdf(conn, document_id) -> pymupdf.Document`: reads the bytes from the attached `pdfs.sqlite`, checks the SHA-256 against `documents.sha256` and raises if they differ. This is the entry point for later validation work.
+    - `crlb/database/manifest.py` reads and checks the manifests; `crlb/database/build.py` has `store_pdf`, `insert_document`, `insert_toc`, `insert_page`, `word_styles` and `build`.
+- `crlb.db.open_pdf(conn, document_id) -> pymupdf.Document` (after `crlb.db.attach_pdfs`): reads the bytes from the attached `pdfs.sqlite`, checks the SHA-256 against `documents.sha256` and raises if they differ. This is the entry point for later validation work.
 
-Makefile targets `list_pdfs` and `build_database` call these commands. No new dependencies: `sqlite3` and `hashlib` are in the standard library; FTS5 is included in the SQLite of uv's Python builds.
+Makefile targets call these commands: `build_poc` (the POC manifest into `data/poc/`, removing an earlier POC build first) and, after the POC, `list_pdfs` and `build_database`. No new dependencies: `sqlite3` and `hashlib` are in the standard library; FTS5 is included in the SQLite of uv's Python builds.
 
 ### Tests
 

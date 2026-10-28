@@ -30,6 +30,7 @@ This project turns the volumes of the **Corpus Rubenianum Ludwig Burchard** (CRL
 - One Python package (`src/crlb/`) with a single command, `crlb`, called from the Makefile.
 - uv for the environment and its lock file. No container: model runtimes, models and external tools are pinned and recorded separately.
 - One SQLite database, growing step by step through numbered schema files.
+- A proof of concept first runs every step on two catalogue entries, one born-digital (XIX (4)) and one OCR (II part 1), with the same code as the full corpus.
 - CRLB content (PDFs, text, exports, reference records) stays in `data/`, outside git.
 
 The code and documentation are published under the MIT licence; everything in the repository is in English.
