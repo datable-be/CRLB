@@ -12,6 +12,7 @@ from crlb.database.build import build
 from crlb.database.manifest import DocumentRow, PartRow
 from crlb.segmentation.config import load_configs
 from crlb.segmentation.segment import segment
+from crlb.segmentation.show import segment_text
 
 CONFIG = """part = "XIX (4)"
 
@@ -91,12 +92,29 @@ def test_segmentation_finds_entries_furniture_and_page_numbers(segmented: Path) 
 def test_show_writes_the_entry_with_its_pages(
     segmented: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """crlb segment show writes an HTML file with the page images and the segment tree, and prints no text."""
+    """crlb segment show writes an HTML file with both views of the pages and the segment tree, and prints no text."""
     main(["segment", "show", str(segmented), "test.pdf", "2"])
     page = next(
         (segmented.parent / "review").glob("segment_run1_test_No2.html")
     ).read_text(encoding="utf-8")
-    assert page.count("<img") == 2 and "Tiberius" in page
+    # Two pages, each in the fields view and the inside-the-fields view
+    assert page.count("<img") == 4 and "Tiberius" in page
     assert "Tiberius" not in capsys.readouterr().out
     with pytest.raises(SystemExit, match="no entry 9"):
         main(["segment", "show", str(segmented), "test.pdf", "9"])
+
+
+def test_entry_text_leaves_out_furniture(segmented: Path) -> None:
+    """The text of an entry that runs over a page break does not contain the page number."""
+    conn = db.connect(segmented)
+    first, last = conn.execute(
+        "SELECT first_word_id, last_word_id FROM segments WHERE kind = 'entry' AND label = '2'"
+    ).fetchone()
+    raw = [
+        r[0]
+        for r in conn.execute(
+            "SELECT text FROM words WHERE id BETWEEN ? AND ?", (first, last)
+        )
+    ]
+    text = [t.text for t in segment_text(conn, first, last, None, 1)]
+    assert "10" in raw and "10" not in text and "continued" in text

@@ -27,3 +27,7 @@ pattern_with_link = '^(?P<number>\d{1,2} ?[a-z]?)(?: ?\.| (?=[A-Z][A-Z]))'
 # and an unreadable or missing number ("lib .", "12dl", "10«."): the number is
 # inferred from the neighbouring entries if exactly one fits.
 pattern_damaged_with_link = '^(?P<number>\S{0,4}?)\s*\.?\s*(?=[A-Z][A-Z ]+:\s*[A-Z]{4,})'
+
+[fields]
+# The fields are set in 7.5 pt, the description in 8.5 pt
+description_min_size = 8.2

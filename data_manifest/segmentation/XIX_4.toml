@@ -34,3 +34,9 @@ prefixes = ["", "U", "R"]
 bold = true
 min_size = 10.6
 max_size = 11.8
+
+[fields]
+# Headings run over several bold lines; the description starts at a new block
+# after a field that ends with a full stop
+heading_bold_lines = true
+description_new_block = true

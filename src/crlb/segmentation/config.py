@@ -26,6 +26,30 @@ class Band:
 
 
 @dataclass(frozen=True)
+class Fields:
+    """How the fields, copies, notes and items of an entry are found."""
+
+    labels: dict[
+        str, list[str]
+    ]  # field name -> labels, compared without spaces, casefolded
+    separator: re.Pattern[str]  # what may follow a label
+    date: re.Pattern[str]
+    heading_bold_lines: bool  # the heading continues over the following bold lines
+    description_new_block: (
+        bool  # the description starts at a new block after a full stop
+    )
+    description_min_size: float | None  # the description is set in at least this size
+    notes_max_size: float
+    note_number: re.Pattern[str]
+    item_fields: list[str]
+    numbered_fields: list[
+        str
+    ]  # fields that list works as "(1) ..., (2) ...": copies, prints, drawings
+    copy_marker: re.Pattern[str]
+    copy_labels: dict[str, list[str]]
+
+
+@dataclass(frozen=True)
 class Config:
     """The segmentation configuration of one part."""
 
@@ -50,6 +74,7 @@ class Config:
     heading_max_size: float
     number: re.Pattern[str]  # entry number, with groups 'prefix', 'digits', 'letter'
     prefixes: list[str]
+    fields: Fields
 
 
 def merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -69,6 +94,8 @@ def parse(raw: dict[str, Any], path: str, sha256: str) -> Config:
     heading = raw["heading"]
     with_link = heading.get("pattern_with_link")
     damaged = heading.get("pattern_damaged_with_link")
+    fields = raw.get("fields", {})
+    copies = raw.get("copies", {})
     return Config(
         part=raw["part"],
         path=path,
@@ -90,6 +117,20 @@ def parse(raw: dict[str, Any], path: str, sha256: str) -> Config:
         heading_max_size=heading.get("max_size", 1000.0),
         number=re.compile(heading["number"]),
         prefixes=heading.get("prefixes", [""]),
+        fields=Fields(
+            labels=fields.get("labels", {}),
+            separator=re.compile(fields.get("separator", ":")),
+            date=re.compile(fields.get("date", "$^")),
+            heading_bold_lines=fields.get("heading_bold_lines", False),
+            description_new_block=fields.get("description_new_block", False),
+            description_min_size=fields.get("description_min_size"),
+            notes_max_size=fields.get("notes_max_size", 0.0),
+            note_number=re.compile(fields.get("note_number", "$^")),
+            item_fields=fields.get("item_fields", []),
+            numbered_fields=fields.get("numbered_fields", []),
+            copy_marker=re.compile(copies.get("marker", "$^")),
+            copy_labels=copies.get("labels", {}),
+        ),
     )
 
 

@@ -19,3 +19,32 @@ names.illustrations = 'illustrations'
 # Prefixes are ordered: all entries without prefix come before those with "R".
 number = '^(?P<prefix>[A-Z]?)(?P<digits>\d+)(?P<letter>[a-z]?)$'
 prefixes = ["", "R"]
+
+[fields]
+# Labels of the labelled fields, per field name; matched at the start of a line,
+# case-insensitively and with spaces ignored ("P rov en a n ce:"), followed by
+# one of the separator characters (OCR turns ":" into "'." or ";")
+labels.provenance = ["provenance"]
+labels.exhibited = ["exhibited"]
+labels.copies = ["copies", "copy", "other versions", "other version"]
+labels.literature = ["literature"]
+labels.drawings = ["drawings", "drawing"]
+labels.prints = ["prints", "engravings", "engraving"]
+separator = "[:;'.]"
+# Before the first label: the material block, then a location (first word in
+# italics) and a date
+date = '^(?:c\.\s*)?1[4-7]\d\d\b'
+# Notes after the description: lines at most this size, starting with a number
+notes_max_size = 7.8
+note_number = '^(?P<number>\d+)\.?$'
+# Fields that are lists, split into items at ";" outside brackets and quotes
+item_fields = ["provenance", "exhibited", "literature"]
+# Fields that list works as "(1) ..., (2) ...", split into copies
+numbered_fields = ["copies", "prints", "drawings"]
+
+[copies]
+# A copy starts at "(n)" (OCR: "(i)", "( i )") at the start of a line or after ";", ":" or "."
+marker = '^\((?P<number>\d+|[ilI])\)[,;:.]?$'
+labels.provenance = ["prov."]
+labels.literature = ["lit."]
+labels.exhibited = ["exh."]

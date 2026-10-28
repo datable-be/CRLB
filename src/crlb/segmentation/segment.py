@@ -16,7 +16,7 @@ from pathlib import Path
 from crlb import db
 from crlb.runs import git_commit, utc_now
 from crlb.sample import SampleItem, add_sample_option, sample_parts
-from crlb.segmentation import checks, rules
+from crlb.segmentation import checks, fields, rules
 from crlb.segmentation.config import Config, load_configs
 from crlb.segmentation.model import Seg, load_document
 from crlb.text import CORRECTION_STEP, active_run
@@ -73,7 +73,17 @@ def segment_document(
         section.children, dropped = rules.entries(
             doc, section, config, furniture_starts
         )
-        counts |= checks.entry_checks(doc, section, section.children, dropped, config)
+        skip = set(furniture_starts)
+        for entry in section.children:
+            lines = [
+                line
+                for line in doc.lines
+                if entry.first <= line.first <= entry.last and line.first not in skip
+            ]
+            entry.children = fields.entry_fields(entry, lines, doc, config)
+        counts |= checks.entry_checks(
+            doc, section, section.children, dropped, furniture, config
+        )
     counts |= checks.page_checks(printed)
 
     insert_segments(conn, run_id, document_id, furniture + sections)

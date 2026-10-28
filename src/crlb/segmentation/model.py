@@ -9,6 +9,7 @@ line), so rules can match on corrected text while boundaries stay raw word ids.
 
 import sqlite3
 from dataclasses import dataclass, field
+from functools import cached_property
 from statistics import median
 
 
@@ -25,6 +26,7 @@ class Word:
     y0: float
     x1: float
     y1: float
+    block_no: int = 0
 
 
 @dataclass
@@ -36,6 +38,9 @@ class Line:
     page_width: float
     words: list[Word]
     corrected: str = ""
+    tokens: list[tuple[str, int]] = field(
+        default_factory=list
+    )  # corrected tokens starting here: text, last word id
 
     @property
     def first(self) -> int:
@@ -61,6 +66,16 @@ class Line:
     def bottom(self) -> float:
         """Return the bottom of the line as a fraction of the page height."""
         return max(w.y1 for w in self.words) / self.page_height
+
+    @property
+    def block_no(self) -> int:
+        """Return the stored block of the first word."""
+        return self.words[0].block_no
+
+    @property
+    def italic(self) -> bool:
+        """Return whether the first word is italic."""
+        return bool(self.words[0].flags & 2)
 
     @property
     def size(self) -> float:
@@ -102,6 +117,24 @@ class Document:
         """Return all lines in reading order."""
         return [line for page in self.pages for line in page]
 
+    @cached_property
+    def words(self) -> dict[int, tuple[Word, int]]:
+        """Return every word with its page index, by word id."""
+        return {w.id: (w, line.page_index) for line in self.lines for w in line.words}
+
+    def links_on(self, first: int, last: int) -> set[int]:
+        """Return the ids of the links that cover a word in the range first..last."""
+        found = set()
+        for i in range(first, last + 1):
+            if i in self.words:
+                word, page = self.words[i]
+                found |= {
+                    link.id
+                    for link in self.links
+                    if link.page_index == page and link.covers(word)
+                }
+        return found
+
 
 @dataclass
 class Seg:
@@ -141,6 +174,7 @@ def visual_lines(
             row["y0"],
             row["x1"],
             row["y1"],
+            row["block_no"],
         )
         key = (row["block_no"], row["line_no"])
         if result and (key == previous_key or same_line(result[-1].words[-1], word)):
@@ -151,16 +185,14 @@ def visual_lines(
     return result
 
 
-def corrected_texts(lines: list[Line], tokens: dict[int, str]) -> None:
-    """Set the corrected text of each line: the tokens that start on it, or the raw words where there is no token."""
+def corrected_texts(lines: list[Line], tokens: dict[int, tuple[str, int]]) -> None:
+    """Set the corrected tokens and text of each line: the tokens that start on it, or the raw words without a correction run."""
     for line in lines:
-        parts = []
-        for word in line.words:
-            if word.id in tokens:
-                parts.append(tokens[word.id])
-            elif not tokens:
-                parts.append(word.text)
-        line.corrected = " ".join(parts)
+        if tokens:
+            line.tokens = [tokens[w.id] for w in line.words if w.id in tokens]
+        else:
+            line.tokens = [(w.text, w.id) for w in line.words]
+        line.corrected = " ".join(text for text, _ in line.tokens)
 
 
 def load_document(
@@ -170,15 +202,16 @@ def load_document(
     doc = conn.execute(
         "SELECT id, path, part FROM documents WHERE id = ?", (document_id,)
     ).fetchone()
-    tokens: dict[int, str] = {}
+    tokens: dict[int, tuple[str, int]] = {}
     if correction_run is not None:
-        tokens = dict(
-            conn.execute(
-                "SELECT c.first_word_id, c.text FROM corrected_words c JOIN pages p ON p.id = c.page_id"
-                " WHERE c.run_id = ? AND p.document_id = ?",
+        tokens = {
+            first: (text, last)
+            for first, last, text in conn.execute(
+                "SELECT c.first_word_id, c.last_word_id, c.text FROM corrected_words c"
+                " JOIN pages p ON p.id = c.page_id WHERE c.run_id = ? AND p.document_id = ?",
                 (correction_run, document_id),
-            ).fetchall()
-        )
+            )
+        }
     pages = []
     for page_id, page_index, height, width in conn.execute(
         "SELECT id, page_index, height, width FROM pages WHERE document_id = ? ORDER BY page_index",
