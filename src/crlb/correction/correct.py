@@ -193,5 +193,5 @@ def run(args: argparse.Namespace) -> None:
         f"correction run {run_id}. Next:\n"
         f"  check it:       crlb correct measure {args.db} <specimens_dir> <split.csv> --run {run_id}\n"
         f"                  crlb correct show {args.db} <document> <page>... --run {run_id}\n"
-        f"  make it active: crlb set-active {args.db} 2 {run_id}"
+        f"  make it active: crlb set-active {args.db} 2 {run_id}   (step 2, run {run_id})"
     )

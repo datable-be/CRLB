@@ -40,5 +40,20 @@ accept_poc:
 	$(call header,Step 2: accept the correction run)
 	$(call run,uv run --locked crlb set-active data/poc/crlb.sqlite 2 latest --note "accepted after measurement and review (POC)")
 
+segment_poc:
+	$(call header,Step 3: segmentation)
+	$(call run,uv run --locked crlb segment run data/poc/crlb.sqlite)
+
+# HTML view of the segmentation of a few entries, in data/poc/review/
+show_segment_poc:
+	$(call header,Step 3: segmentation of entries on the page)
+	$(call run,uv run --locked crlb segment show data/poc/crlb.sqlite 19_4_links 22 23)
+	$(call run,uv run --locked crlb segment show data/poc/crlb.sqlite 02_1_links 6 10a)
+
+# The explicit decision after checking: step 4 reads the entries and fields of this run
+accept_segment_poc:
+	$(call header,Step 3: accept the segmentation run)
+	$(call run,uv run --locked crlb set-active data/poc/crlb.sqlite 3 latest --note "accepted after checking (POC)")
+
 help:
-	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, measure_poc, show_poc, poc, accept_poc"
+	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, measure_poc, show_poc, poc, accept_poc, segment_poc, show_segment_poc, accept_segment_poc"

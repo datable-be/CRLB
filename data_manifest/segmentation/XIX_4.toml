@@ -1,0 +1,36 @@
+# XIX (4), Portraits after Existing Prototypes (2016), born-digital InDesign PDF with RKD links.
+part = "XIX (4)"
+
+# Running head at the top (6.8 pt, "CATALOGUE No. 3"), page number at the
+# bottom (7 pt) and a 5 pt page mark below it.
+[[furniture]]
+label = "running_head"
+top = 0.0
+bottom = 0.115
+max_size = 7.2
+
+[[furniture]]
+label = "page_number"
+top = 0.87
+bottom = 0.90
+max_size = 7.2
+
+[[furniture]]
+label = "page_mark"
+top = 0.93
+bottom = 1.0
+max_size = 5.5
+
+[sections]
+# No bookmarks: sections follow the running heads, without their entry numbers
+source = "running_heads"
+head_name = '^(.*?)(?:\s+Nos?\.?\s.*)?$'
+
+[heading]
+# "No. 22. Augustus: Painting (Fig. 79)", bold 11.2 pt; the unresolved (U1-U5)
+# and rejected (R1-R8) attributions at the end have no "No."
+pattern = '^(?:No\.\s*)?(?P<number>[UR]?\d+[a-z]?)\.'
+prefixes = ["", "U", "R"]
+bold = true
+min_size = 10.6
+max_size = 11.8

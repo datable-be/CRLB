@@ -1,0 +1,21 @@
+# Defaults for every volume; a volume file overrides any key it sets.
+# Positions are fractions of the page height (0 = top, 1 = bottom), so they
+# work for scans whose page size varies.
+
+# Words in these fonts were set by the tool that added the RKD links. They are
+# real text (copy numbers such as "(7)") but stored out of reading order, at
+# the end of the page, so they are marked as furniture.
+link_tool_fonts = ["BellMT"]
+
+[sections]
+# Section names, matched case-insensitively against bookmark titles or running heads
+names.catalogue = 'catalog'
+names.abbreviations = 'abbreviations|bibliography'
+names.index = '^index'
+names.illustrations = 'illustrations'
+
+[heading]
+# Entry numbers: an optional prefix, digits and an optional letter ("22", "10a", "R3").
+# Prefixes are ordered: all entries without prefix come before those with "R".
+number = '^(?P<prefix>[A-Z]?)(?P<digits>\d+)(?P<letter>[a-z]?)$'
+prefixes = ["", "R"]

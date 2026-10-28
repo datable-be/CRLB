@@ -7,6 +7,8 @@ from crlb import set_active
 from crlb.correction import correct, lexicon, measure, show
 from crlb.database import build
 from crlb.ocr import analyse_specimens, sample_specimens
+from crlb.segmentation import segment
+from crlb.segmentation import show as segment_show
 
 
 def add_command(
@@ -39,6 +41,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     for name, module in (("run", correct), ("measure", measure), ("show", show)):
         add_command(correction_commands, name, module)
+
+    segmentation = commands.add_parser(
+        "segment", help="segmentation (step 3) and its review"
+    )
+    segment_commands = segmentation.add_subparsers(
+        dest="segment_command", required=True
+    )
+    add_command(segment_commands, "run", segment)
+    add_command(segment_commands, "show", segment_show)
 
     add_command(commands, "set-active", set_active)
 

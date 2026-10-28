@@ -11,7 +11,7 @@ from crlb import db
 from crlb.runs import utc_now
 
 # The run table of each step; later steps add theirs
-RUN_TABLES = {"2": "correction_runs"}
+RUN_TABLES = {"2": "correction_runs", "3": "segmentation_runs"}
 
 
 def configure(parser: argparse.ArgumentParser) -> None:

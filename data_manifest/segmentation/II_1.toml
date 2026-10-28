@@ -1,0 +1,29 @@
+# II (1), ABBYY FineReader 11 OCR with RKD links.
+part = "II (1)"
+
+# No running heads; the page number is at the bottom in bold 14 pt (AngsanaUPC).
+[[furniture]]
+label = "page_number"
+top = 0.86
+bottom = 1.0
+min_size = 11.0
+
+[sections]
+# Top-level bookmarks; the catalogue starts at "CATALOGUE RAISONNE"
+source = "bookmarks"
+level = 1
+
+[heading]
+# "6. KING DAVID PLAYING THE HARP: TAPESTRY (Fig. 117)" or "3a. See above, No. 1-5a."
+# The number's font and size vary with the OCR (Georgia 7-8.5 pt, Tahoma,
+# AngsanaUPC 14 pt) and ABBYY often puts it in a block of its own, so the
+# heading is found on the visual line by pattern, not by style. A title in
+# capitals or "See" is required, unless an RKD link lies on the line (titles
+# in small caps can come out as spaced lowercase letters), and a full stop is
+# not required before a title in capitals.
+pattern = '^(?P<number>\d{1,2} ?[a-z]?) ?\.\s*(?:(?=[A-Z][A-Z])|See\b)'
+pattern_with_link = '^(?P<number>\d{1,2} ?[a-z]?)(?: ?\.| (?=[A-Z][A-Z]))'
+# A linked title in capitals with its type ("THE FOUR EVANGELISTS: TAPESTRY")
+# and an unreadable or missing number ("lib .", "12dl", "10«."): the number is
+# inferred from the neighbouring entries if exactly one fits.
+pattern_damaged_with_link = '^(?P<number>\S{0,4}?)\s*\.?\s*(?=[A-Z][A-Z ]+:\s*[A-Z]{4,})'
