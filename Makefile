@@ -65,5 +65,17 @@ accept_segment_poc:
 	$(call header,Step 3: accept the segmentation run)
 	$(call run,uv run --locked crlb set-active data/poc/crlb.sqlite 3 latest --note "accepted after checking (POC)")
 
+# Objects, exhibitions and literature, and provenance by rules, for the two POC entries
+extract_poc:
+	$(call header,Step 4: extraction by rules)
+	$(call run,uv run --locked crlb extract run data/poc/crlb.sqlite --sample "$(POC_SAMPLE)")
+
+# The explicit decision after checking: exports read the runs of these fields
+accept_extract_poc:
+	$(call header,Step 4: accept the extraction runs)
+	$(call run,uv run --locked crlb set-active data/poc/crlb.sqlite 4:objects latest --note "accepted after checking (POC)")
+	$(call run,uv run --locked crlb set-active data/poc/crlb.sqlite 4:references latest --note "accepted after checking (POC)")
+	$(call run,uv run --locked crlb set-active data/poc/crlb.sqlite 4:provenance latest --note "accepted after checking (POC)")
+
 help:
-	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, measure_poc, show_poc, poc, accept_poc, segment_poc, entries_poc, show_segment_poc, accept_segment_poc"
+	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, measure_poc, show_poc, poc, accept_poc, segment_poc, entries_poc, show_segment_poc, accept_segment_poc, extract_poc, accept_extract_poc"

@@ -1,0 +1,10 @@
+crlb_term,label_nl
+purchased,purchase (method of acquisition)
+bought,purchase (method of acquisition)
+sold,purchase (method of acquisition)
+bequeathed,bequest (method of acquisition)
+given,gift (method of acquisition)
+donated,donation (method of acquisition)
+inherited,inheritance
+exchanged,exchange (method of acquisition)
+deposited,loan (method of acquisition)

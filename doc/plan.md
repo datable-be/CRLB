@@ -95,6 +95,7 @@ CREATE TABLE llm_calls (
 ```
 
 A run becomes active only by an explicit command (`crlb set-active`), after its measurement, never automatically. For step 2 the active run is the last run of a chain (`based_on`), for example the 2b run built on the 2a run. Reviews and corrections are described in "Review and corrections (all steps)".
+
 ## Proof of concept
 
 Before the whole corpus, every step is run on two catalogue entries: one from XIX (4) (born-digital, `CRLB_19_4_links RKD Research.pdf`) and one from II part 1 (ABBYY, `CRLB_02_1_links`). Each step gets its most important parts; the code is the same as for the full corpus, which only needs a longer manifest and more configuration.
@@ -102,7 +103,13 @@ Before the whole corpus, every step is run on two catalogue entries: one from XI
 1. **Step 1:** the manifest lists the two POC PDFs and the OCR files used for measurement (`make build_poc`, about 50 seconds).
 2. **Step 2a** on the two documents: rules R1–R3, the effective text (`crlb.text`) and `crlb set-active`. The lexicon is built from all 31 born-digital volumes, read directly from the PDFs (`data_manifest/lexicon_sources.csv`, about 80 seconds): it covers 96.9% of the ground-truth tokens of the II (1) specimens, against 79.1% for XIX (4) alone. Left out of the POC: the gap investigation, the review sample, steps 2b and 2c. Besides the two POC documents, the manifest contains the other OCR files with hand-corrected specimens (II index, XIX (2) and its index, XXVI (2.1) and its index), only for measurement on all 12 specimen pages (6 development, 6 test). `make poc` runs steps 1 and 2a, the measurement and the side-by-side view of XXVI (2.1) p. 393, and stops there: accepting the correction run is a separate, explicit decision (`make accept_poc`, which makes the latest run active) before step 3. It is a decision about the run as a whole; individual wrong joins are corrected later through `reviews`, on top of the active run.
 3. **Step 3** on the two documents in full, since entries are found by segmenting them (`make segment_poc`, about 10 seconds). In the POC: furniture and printed page numbers, sections, entries, fields (heading, material, location, date, labelled fields, description, notes), copies with their sub-fields, items, single notes, the checks and the review view (`crlb segment show`). Left out of the POC: paragraphs and note markers (rules 7 and 8, apart from the split into single notes), items in the abbreviation and exhibition sections, index entries (rule 10), and the comparison with the registration lists. The two POC entries were chosen from the entry list (`make entries_poc`): **XIX (4) No. 4** (Study of two Heads (Plato?), New York; 20 provenance stages, 7 exhibitions, 3 copies, 38 literature references) and **II (1) No. 12c** (The Triumph of Faith: modello, Brussels; 17 provenance stages, 9 exhibitions, 16 copies, 17 literature references). Steps 4 and 5 run on them with `--sample "XIX (4)/4;II (1)/12c"` (`POC_SAMPLE` in the Makefile). As in step 2, the segmentation run is accepted explicitly (`make accept_segment_poc`) before step 4.
-4. **Step 4** for the two entries: rules for the object core, literature and exhibitions; provenance with one local LLM; a hand-made reference record per entry; the Markdown export.
+4. **Step 4** for the two entries, in three parts:
+    - **Part 1, rules** (`make extract_poc`, then `make accept_extract_poc`): objects for the entry and each copy (identifiers, title, object name, material, dimensions, date, attribution, lost or destroyed, the relation to the entry), exhibitions and literature split into reference and locator, provenance in its fixed forms with the chain and the current location. The two entries have 58 provenance stages: rules handle 40, and 18 are left for the LLM.
+    - **Part 2, provenance with a local LLM** for the stages that rules leave. The models are Qwen3.5 4B and Ministral 3 8B, compared on the same items in llama.cpp `llama-server` (see "Models").
+    - **Part 3**: the review page per entry and the Markdown export (faithful version).
+
+    Reference records are not made in the POC. Instead, the measurement uses what needs no ground truth: rejected LLM answers, agreement between the rules and the LLM on the stages both handle, agreement between the two models, and a check of the review pages.
+
 5. **Step 5**, minimal: normalisation, one LOD lookup and the RKD comparison if the export is available; the index PDFs are added to the manifest for the control lists.
 
 ## Step 1: text database
@@ -195,10 +202,10 @@ The manifest is written once by hand (with a helper script that lists candidates
 
 Two SQLite files, both in `data/` and therefore outside git:
 
-| File               | Content                                                                          | Shareable                               |
-| :----------------- | :------------------------------------------------------------------------------- | :-------------------------------------- |
-| `data/crlb.sqlite` | documents, pages, words, links, bookmarks, full-text index; the tables of the later steps | no (CRLB text)                          |
-| `data/pdfs.sqlite` | the PDF files as raw bytes, in the [sqlar](https://sqlite.org/sqlar.html) format | no (copyright)                          |
+| File               | Content                                                                                   | Shareable      |
+| :----------------- | :---------------------------------------------------------------------------------------- | :------------- |
+| `data/crlb.sqlite` | documents, pages, words, links, bookmarks, full-text index; the tables of the later steps | no (CRLB text) |
+| `data/pdfs.sqlite` | the PDF files as raw bytes, in the [sqlar](https://sqlite.org/sqlar.html) format          | no (copyright) |
 
 `crlb.sqlite` refers to a PDF by its path and SHA-256 hash. When a later step needs the PDF itself (to render a page or highlight a word), it attaches `pdfs.sqlite` and checks the hash, so the coordinates are guaranteed to belong to that exact file.
 
@@ -881,12 +888,12 @@ The same as in steps 2 and 3:
 
 **Division of work with step 5.** A value goes through four stages, each kept separately:
 
-| Stage | Example | Where |
-| :--- | :--- | :--- |
-| verbatim | `c. 1598–1600`, `Duarte Pinto Coehlo`, `£3 4s 2d` | step 4, `*_text` columns |
-| parsed into the RO structure | start `1598`, end `1600`; holder `Duarte Pinto Coehlo`; amount `£3 4s 2d` | step 4 |
-| in the RKD form, with control-list terms | date remark; `Pinto Coelho, Duarte`; `3.4.2` + `Lsd` | step 5b, `normalised_values` |
-| with LOD URIs | RKDartists, TGN, AAT URIs | step 5c, `cluster_uris` |
+| Stage                                    | Example                                                                   | Where                        |
+| :--------------------------------------- | :------------------------------------------------------------------------ | :--------------------------- |
+| verbatim                                 | `c. 1598–1600`, `Duarte Pinto Coehlo`, `£3 4s 2d`                         | step 4, `*_text` columns     |
+| parsed into the RO structure             | start `1598`, end `1600`; holder `Duarte Pinto Coehlo`; amount `£3 4s 2d` | step 4                       |
+| in the RKD form, with control-list terms | date remark; `Pinto Coelho, Duarte`; `3.4.2` + `Lsd`                      | step 5b, `normalised_values` |
+| with LOD URIs                            | RKDartists, TGN, AAT URIs                                                 | step 5c, `cluster_uris`      |
 
 ### Mapping from the CRLB entry to the RO model
 
@@ -917,6 +924,13 @@ The provenance chain needs care in the mapping, because the CRLB writes it as on
 ### Schema
 
 All step 4 tables start with `ro_`. Column names follow the RO model where a column corresponds to an RO property; the extra columns (`*_text`, source, run, status) are for traceability and validation and are not exported to RO as such.
+
+**In the POC** (`04_extraction.sql`), only the tables that the POC fills are created: `ro_runs`, `ro_objects`, `ro_object_identifiers`, `ro_attributions`, `ro_dimensions`, `ro_collection_stays`, `ro_auctions`, `ro_object_exhibitions`, `ro_object_sources` and `ro_related_objects`. The other tables wait until the abbreviation and exhibition lists, inscriptions and paragraphs are segmented: `ro_exhibitions`, `ro_text_resources`, `ro_inscriptions`, `ro_text_paragraphs` and `ro_text_notes`. The POC tables differ from the design below in these ways:
+
+- the provenance tables have a `method` column (`rules` or `llm`), because one run combines both;
+- `ro_auctions` has `auction_consignor_derived`, for a consignor taken from the previous stage;
+- `ro_object_exhibitions` has `exhibition_reference` and `ro_object_sources` has `source_reference`, both verbatim. They have no `exhibition_id` or `source_id` yet, because nothing resolves them to the lists;
+- `ro_collection_stays` has no removal method, removal note or date remark yet.
 
 ```sql
 -- One row per extraction run (per field and method).
@@ -1131,6 +1145,22 @@ Notes:
 - **Provenance:** per item: rules recognise the frequent fixed forms (`sale, London (Christie’s), 20–21 July 2011, lot 550`; `his sale`; `with the dealer X, Brussels, 1971`); everything else goes to the LLM. Dates in any form (`15ff. June 1874`, `in 1796 ?`, `(1612 - 23 October 1652)`) are parsed by rules into start/end.
 - **Descriptive text:** paragraphs and notes from step 3; `text_display` by rules: remove `(Fig. 58)`, `(No. 15; Fig. 58)` and similar, resolve `Ibid.` to the previous note's citation and `op. cit.`/`loc. cit.` to the last citation of that author.
 
+### POC findings (part 1, rules)
+
+On the two POC entries:
+
+- 21 objects: 2 entries and 19 copies, all 21 with an RKD id;
+- 17 exhibitions and 92 literature references;
+- 58 provenance stages: 25 collection stays and 14 auctions by rules, 1 merged into the current location, and 18 left for the LLM.
+
+Every verbatim value occurs in its source. On all 164 entries of both volumes, the run takes about 20 s: rules handle 642 of the 990 provenance stages, and leave 348 for the LLM.
+
+Known gaps:
+
+- **Errors carried over from step 3**: in No. 4, the print of copy (3) is read as part of its literature. In No. 12c, copy (11) is read into the literature of copy (10). In II (1), the tapestry marks spill into the location field.
+- **Entry attribution** (decided): an entry gets no attribution row. Its attribution to Rubens goes without saying in the catalogue. Only attributions stated in the text, such as those of copies, are recorded.
+- **Order in locations**: a location such as `R. Lauwers, Mechelen, 2016` gets the order of place and holder wrong. The rules assume the place comes first, unless the first part names a type of collection.
+
 ### LLM tasks
 
 Each task is one prompt with a JSON schema, both in git (`src/crlb/extraction/prompts/<task>.md` and `.json`), with a few examples taken from the development set. Input is one item plus minimal context (the field name, the previous stage for provenance).
@@ -1156,6 +1186,18 @@ Escalation path, each step only if the measurement of the previous one is insuff
 3. **Frontier model** (Claude, OpenAI, Gemini), only for the fields where 1 and 2 do not reach the threshold.
 
 Runtime: Ollama or the llama.cpp server (a llamafile is llama.cpp packaged as one file; the results are the same), called from Python over HTTP, with the JSON schema passed for constrained decoding. The runtime is behind a small interface so a cloud API can be swapped in for step 2 or 3 of the escalation without changing the tasks.
+
+**Chosen for the POC:**
+
+- **Runtime:** llama.cpp `llama-server`, a pinned release build: the prebuilt Linux binary in a user directory, with no root and no service. It offers constrained decoding with `json_schema`, prompt-prefix caching (`cache_prompt`), and a fixed seed at temperature 0. Its build number is recorded in `ro_runs.runtime`. Ollama uses the same engine, but it installs a system service and keeps the model file in its own store, which makes the exact file harder to pin.
+- **Models**, run one at a time, with reasoning ("thinking") off:
+    - **Qwen3.5 4B**, 4-bit (Q4_K_M, about 2.7 GB): fast on this CPU and strong at structured output;
+    - **Ministral 3 8B Instruct 2512**, 4-bit (Q4_K_M, about 5.2 GB): Mistral, as the EU comparison;
+    - **Qwen3.5 9B** as a fallback, only if the 4B model rejects or disagrees too often.
+
+    Each model is pinned by repository, file name and SHA-256 in `data_manifest/models.csv`; the model files are kept in `data/models/`.
+
+- **Expected time** on the development machine, an i7-8550U with 4 cores, 16 GB RAM and no GPU, with the fixed part of the prompt cached: about 10–15 s per provenance stage with the 4B model and 20–30 s with the 8B model. For the 58 stages of the two POC entries, that is about 10–15 and 20–30 minutes; rules take under a minute. The first run measures the real time.
 
 Every model and runtime used is added to `README.md` under AI usage.
 
@@ -1245,7 +1287,14 @@ Files are written to `data/entries/<part>/<catalogue number>.md` and `…-displa
 
 ### Code
 
-Subpackage `crlb.extraction`, schema `04_extraction.sql`:
+Subpackage `crlb.extraction`, schema `04_extraction.sql`. In the POC, `crlb extract run <db> --sample` writes three rules runs, one per field (`objects`, `references` and `provenance`). The references and provenance runs attach their rows to the objects of the objects run from the same call. Each field is accepted separately (`crlb set-active <db> 4:<field> <run>`). Each run checks that every verbatim value occurs in the text of its source, and reports the count. The code is in:
+
+- `source.py`: the entries as segment trees with their text;
+- `objects.py`, `references.py`, `provenance.py` and `dates.py`: the rules;
+- `vocabularies.py` and `vocabularies/`: the RO value lists, copied from the published data model, and the mapping tables;
+- `extract.py`: the command.
+
+The design for the full corpus:
 
 - `crlb extract lists | objects | references | provenance | texts`: each writes one `ro_runs` row and its tables, and prints only counts.
 - `crlb.llm` (core): the runtime interface, schema-constrained calls, the span and list checks, logging to `llm_calls`.

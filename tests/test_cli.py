@@ -8,6 +8,7 @@ from crlb import set_active
 from crlb.cli import build_parser, main
 from crlb.correction import correct, lexicon, measure
 from crlb.database import build
+from crlb.extraction import extract
 from crlb.ocr import analyse_specimens, sample_specimens
 
 
@@ -28,6 +29,20 @@ def test_step_2_commands_dispatch_to_their_modules() -> None:
         is measure.run
     )
     assert parser.parse_args(["set-active", "db", "2", "1"]).func is set_active.run
+
+
+def test_step_4_commands_dispatch_to_their_modules() -> None:
+    """Check that extract run calls its module and set-active accepts a step 4 field."""
+    parser = build_parser()
+    args = parser.parse_args(["extract", "run", "db", "--sample", "XIX (4)/4"])
+    assert args.func is extract.run
+    assert [(item.part, item.number) for item in args.sample] == [("XIX (4)", "4")]
+    assert (
+        parser.parse_args(["set-active", "db", "4:provenance", "1"]).func
+        is set_active.run
+    )
+    with pytest.raises(SystemExit):
+        parser.parse_args(["set-active", "db", "4:texts", "1"])
 
 
 def test_ocr_subcommands_dispatch_to_their_modules() -> None:
