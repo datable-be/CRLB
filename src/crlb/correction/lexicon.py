@@ -12,7 +12,6 @@ import hashlib
 import sqlite3
 import time
 from collections import Counter
-from collections.abc import Iterable
 from itertools import pairwise
 from pathlib import Path
 
@@ -82,13 +81,17 @@ def ocr_forms(conn: sqlite3.Connection) -> Counter[str]:
 
 
 def build_lexicon(
-    conn: sqlite3.Connection, root: Path, sources: Iterable[str]
+    conn: sqlite3.Connection, root: Path, sources: list[str]
 ) -> tuple[int, int, int]:
-    """Replace the lexicon, bigrams and sources in the database; return the counts of sources, forms and bigrams."""
+    """Replace the lexicon, bigrams and sources in the database; return the counts of sources, forms and bigrams.
+
+    Prints progress per source (path and counts only).
+    """
     forms: Counter[str] = Counter()
     bigrams: Counter[tuple[str, str]] = Counter()
     source_rows = []
-    for name in sources:
+    for i, name in enumerate(sources, 1):
+        started = time.monotonic()
         path = root / name
         pages = pdf_pages(path)
         before = forms.total()
@@ -97,7 +100,18 @@ def build_lexicon(
         source_rows.append(
             (name, file_sha256(path), len(pages), forms.total() - before, utc_now())
         )
+        print(
+            f"  [{i}/{len(sources)}] {name}: {len(pages)} pages, "
+            f"{forms.total() - before} words ({time.monotonic() - started:.0f} s)",
+            flush=True,
+        )
+    started = time.monotonic()
     ocr = ocr_forms(conn)
+    print(
+        f"  OCR documents in the database: {ocr.total()} words "
+        f"({time.monotonic() - started:.0f} s)",
+        flush=True,
+    )
 
     conn.execute("DELETE FROM lexicon")
     conn.execute("DELETE FROM bigrams")
