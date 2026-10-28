@@ -7,7 +7,7 @@ from crlb import set_active
 from crlb.correction import correct, lexicon, measure, show
 from crlb.database import build
 from crlb.ocr import analyse_specimens, sample_specimens
-from crlb.segmentation import segment
+from crlb.segmentation import entries, segment
 from crlb.segmentation import show as segment_show
 
 
@@ -50,6 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_command(segment_commands, "run", segment)
     add_command(segment_commands, "show", segment_show)
+    add_command(segment_commands, "entries", entries)
 
     add_command(commands, "set-active", set_active)
 

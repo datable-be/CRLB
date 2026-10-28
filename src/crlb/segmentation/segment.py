@@ -85,6 +85,18 @@ def segment_document(
             doc, section, section.children, dropped, furniture, config
         )
     counts |= checks.page_checks(printed)
+    if correction_run is not None:
+        joined = [
+            (first, last)
+            for first, last in conn.execute(
+                "SELECT c.first_word_id, c.last_word_id FROM corrected_words c JOIN pages p ON p.id = c.page_id"
+                " WHERE c.run_id = ? AND p.document_id = ? AND c.last_word_id > c.first_word_id",
+                (correction_run, document_id),
+            )
+        ]
+        counts["boundaries inside a joined token (step 2)"] = checks.boundary_conflicts(
+            checks.walk(sections), joined
+        )
 
     insert_segments(conn, run_id, document_id, furniture + sections)
     page_ids = dict(

@@ -1,6 +1,7 @@
 """Built-in checks of a segmentation, reported as counts."""
 
 import itertools
+from bisect import bisect_right
 from collections import Counter
 
 from crlb.segmentation.config import Config
@@ -75,6 +76,32 @@ def entry_checks(
         "RKD links on text moved by the link tool": len(unanchored & moved),
         "RKD links in the catalogue not on a heading or copy": len(unanchored - moved),
     }
+
+
+def boundary_conflicts(segs: list[Seg], joined: list[tuple[int, int]]) -> int:
+    """Return the number of segments with a boundary inside a joined token of the correction run.
+
+    `joined` holds the (first, last) word ids of corrected tokens that cover
+    more than one raw word. A boundary inside one means a wrong join (step 2)
+    or a wrong boundary (step 3); the effective text then uses the raw words.
+    """
+    starts = sorted(joined)
+    firsts = [a for a, _ in starts]
+
+    def inside(word_id: int, at_start: bool) -> bool:
+        """Return whether a boundary at word_id splits a joined token."""
+        k = bisect_right(firsts, word_id) - 1
+        if k < 0:
+            return False
+        a, b = starts[k]
+        return a < word_id <= b if at_start else a <= word_id < b
+
+    return sum(
+        1
+        for seg in segs
+        if seg.kind != "furniture"
+        and (inside(seg.first, True) or inside(seg.last, False))
+    )
 
 
 def page_checks(printed: list[tuple[int, str | None, str]]) -> dict[str, int]:

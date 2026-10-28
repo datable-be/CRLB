@@ -23,14 +23,15 @@ prefixes = ["", "R"]
 [fields]
 # Labels of the labelled fields, per field name; matched at the start of a line,
 # case-insensitively and with spaces ignored ("P rov en a n ce:"), followed by
-# one of the separator characters (OCR turns ":" into "'." or ";")
+# a separator: ":" or ";", or "'." as the OCR sometimes reads ":"; a full stop
+# alone does not count, as a line may start with "drawing." in running text
 labels.provenance = ["provenance"]
 labels.exhibited = ["exhibited"]
 labels.copies = ["copies", "copy", "other versions", "other version"]
 labels.literature = ["literature"]
 labels.drawings = ["drawings", "drawing"]
 labels.prints = ["prints", "engravings", "engraving"]
-separator = "[:;'.]"
+separator = ":|;|'\\."
 # Before the first label: the material block, then a location (first word in
 # italics) and a date
 date = '^(?:c\.\s*)?1[4-7]\d\d\b'

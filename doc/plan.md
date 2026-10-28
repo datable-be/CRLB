@@ -101,7 +101,7 @@ Before the whole corpus, every step is run on two catalogue entries: one from XI
 
 1. **Step 1:** the manifest lists the two POC PDFs and the OCR files used for measurement (`make build_poc`, about 50 seconds).
 2. **Step 2a** on the two documents: rules R1–R3, the effective text (`crlb.text`) and `crlb set-active`. The lexicon is built from all 31 born-digital volumes, read directly from the PDFs (`data_manifest/lexicon_sources.csv`, about 80 seconds): it covers 96.9% of the ground-truth tokens of the II (1) specimens, against 79.1% for XIX (4) alone. Left out of the POC: the gap investigation, the review sample, steps 2b and 2c. Besides the two POC documents, the manifest contains the other OCR files with hand-corrected specimens (II index, XIX (2) and its index, XXVI (2.1) and its index), only for measurement on all 12 specimen pages (6 development, 6 test). `make poc` runs steps 1 and 2a, the measurement and the side-by-side view of XXVI (2.1) p. 393, and stops there: accepting the correction run is a separate, explicit decision (`make accept_poc`, which makes the latest run active) before step 3. It is a decision about the run as a whole; individual wrong joins are corrected later through `reviews`, on top of the active run.
-3. **Step 3** on the two documents in full, since entries are found by segmenting them; the two entries are chosen here.
+3. **Step 3** on the two documents in full, since entries are found by segmenting them (`make segment_poc`, about 10 seconds). In the POC: furniture and printed page numbers, sections, entries, fields (heading, material, location, date, labelled fields, description, notes), copies with their sub-fields, items, single notes, the checks and the review view (`crlb segment show`). Left out of the POC: paragraphs and note markers (rules 7 and 8, apart from the split into single notes), items in the abbreviation and exhibition sections, index entries (rule 10), and the comparison with the registration lists. The two POC entries were chosen from the entry list (`make entries_poc`): **XIX (4) No. 4** (Study of two Heads (Plato?), New York; 20 provenance stages, 7 exhibitions, 3 copies, 38 literature references) and **II (1) No. 12c** (The Triumph of Faith: modello, Brussels; 17 provenance stages, 9 exhibitions, 16 copies, 17 literature references). Steps 4 and 5 run on them with `--sample "XIX (4)/4;II (1)/12c"` (`POC_SAMPLE` in the Makefile). As in step 2, the segmentation run is accepted explicitly (`make accept_segment_poc`) before step 4.
 4. **Step 4** for the two entries: rules for the object core, literature and exhibitions; provenance with one local LLM; a hand-made reference record per entry; the Markdown export.
 5. **Step 5**, minimal: normalisation, one LOD lookup and the RKD comparison if the export is available; the index PDFs are added to the manifest for the control lists.
 
@@ -779,7 +779,15 @@ The rules run in this order, each on the result of the previous one:
       The separator and the item pattern are part of the volume configuration, because the conventions changed over time (the 2015 bibliography rules apply from V (1), 2014).
 10. **Index entries.** In the index documents and index sections: one `item` per index entry (heading term with its page references), with sub-entries as child items, recognised by indentation and the page-reference pattern (`123`, `123–125`, `n. 12`, `Fig. 58`, `No. 22`); entries continuing in the next column or on the next page stay one item. Step 5 parses them into terms with page references. Each index is segmented once: where a born-digital index excerpt exists (`excerpt_of`), the excerpt is used and the index pages of the main PDF are marked as a `section` labelled `index (see excerpt)` without items, so no index term is counted twice.
 
-Patterns, label lists, style thresholds and furniture bands are kept in one configuration file per volume (`data_manifest/segmentation/<part>.toml`, in git), with shared defaults. Configurations are developed on a few pages and then checked on the whole volume.
+Patterns, label lists, style thresholds and furniture bands are kept in one configuration file per volume (`data_manifest/segmentation/<part>.toml`, in git, for example `XIX_4.toml` and `II_1.toml`), on top of `defaults.toml`; a file names its `part` and overrides any default key. TOML is used because the files are written by hand and are mostly regular expressions: TOML allows comments to explain each pattern and threshold, and single-quoted strings are literal, so a regular expression is written without doubled backslashes; Python reads it with the standard library (`tomllib`). The tables are `[[furniture]]` (bands as fractions of the page height, with size limits), `[sections]` (bookmarks or running heads, section names), `[heading]` (heading patterns, style, numbering prefixes), `[fields]` (labels per field, separators, date pattern, description and note rules, list fields) and `[copies]` (copy marker, sub-field labels). Configurations are developed on a few pages and then checked on the whole volume.
+
+Findings from the POC configurations:
+
+- **Visual lines.** ABBYY often puts an entry number and its title in separate blocks on the same line, so headings are matched on visual lines (consecutive words on the same height), not on stored lines.
+- **Headings in OCR volumes** cannot rely on style: in II (1) the entry number appears in Georgia 7–8.5 pt, Tahoma or AngsanaUPC 14 pt. They are found by pattern, with the RKD link on the title as evidence. A linked title in capitals with an unreadable or missing number (`10«.`, `lib .`, `12dl`, no number at all) gets the one number that fits between its neighbours, with confidence `uncertain`.
+- **Labels are matched on the corrected text** of step 2 (`Provenance:`). Where step 2 left a letter-spaced label unjoined (`P r o v e n a n c e :`), the raw words are matched with spaces ignored; such fallbacks are marked in the reason and counted (19 in II (1)), as feedback on joins step 2 missed. Copy markers and item splits use the raw words: punctuation is the same in both, and boundaries are raw word ids anyway.
+- **A full stop is not a label separator** (only `:`, `;` and the OCR's `'.`), since running text can start a line with `drawing.`.
+- **Fields that list works** (`copies`, `prints`, `drawings`) are split into copies at `(n)`, also mid-line after `;` and with OCR damage (`( i )`, `59!`), allowing one missing number; a field without markers (`Copy: Drawing ...`) is one copy.
 
 ### Checks and measurement
 
@@ -810,8 +818,9 @@ Reference data:
 
 Subpackage `crlb.segmentation`, schema `03_segmentation.sql`:
 
-- `crlb segment`: runs the rules for the given documents with their configuration, writes `segmentation_runs`, `segments`, `printed_pages` and `note_refs`. Prints only counts and check results.
-- `crlb segment review`: writes a review file for a sample of entries to `data/` (not printed).
+- `crlb segment run <db> [--sample]`: runs the rules for the main documents that have a configuration, writes `segmentation_runs`, `segments` and `printed_pages` (`note_refs` stays empty in the POC). Prints only counts and check results, including boundary conflicts with the active correction run.
+- `crlb segment entries <db> <document>`: one line per entry with its pages, confidence, RKD link and the number of items, copies or notes per field; no text. Used to choose entries for review or work.
+- `crlb segment show <db> <document> <entry>…`: an HTML page per entry in `review/` next to the database: the entry's PDF pages coloured by field, the same pages coloured by what lies inside the fields (copies with their sub-fields, items, notes; legend entries such as `copies › copy › provenance › item`), the RKD links outlined (the link tool's own highlights hidden), and the segment tree with rule, confidence, reason and text.
 - `data_manifest/segmentation/`: the per-volume configuration files (in git).
 
 `crlb set-active` (core, see "Implementation") sets the active run of this and every other step.
@@ -835,8 +844,10 @@ Subpackage `crlb.segmentation`, schema `03_segmentation.sql`:
 
 ### Points to check first
 
-- The `(7)` in a different font (BellMT 10 pt) at the position of an RKD link in XIX (4): possibly text added by the tool that added the links. If so, it must be treated as furniture, not as part of the copy.
-- Whether ABBYY's font sizes are consistent enough across a whole volume for the style rules, or need a tolerance per volume.
+- The `(7)` in a different font (BellMT 10 pt) at the position of an RKD link in XIX (4). **Checked:** text set by the link tool (copy numbers such as `(7)`, and in II also `* Painting`). It is real text, without a duplicate on the page, but stored at the end of the page, out of reading order, so it is marked as furniture (`moved_by_link_tool`); the checks count the RKD links on it separately.
+- Whether ABBYY's font sizes are consistent enough across a whole volume for the style rules. **Checked for II (1):** not for headings (see above); the sizes of fields (7.5 pt), description (8.5 pt) and notes are consistent and are used.
+
+Known gaps in the POC segmentation: entry II 14b is not found (damaged number and a title in lowercase); `l-5a` is read as 1a, although cross-references suggest a numbering such as `1-5a`; in II (1) many note numbers are damaged by the OCR, so few notes are found; XIX (4) No. 54 is a group heading without fields.
 
 ## Step 4: extraction
 

@@ -38,7 +38,7 @@ BASE = Config(
             "copies": ["copies", "copy"],
             "literature": ["literature"],
         },
-        separator=re.compile("[:;'.]"),
+        separator=re.compile(r":|;|'\."),
         date=re.compile(r"^(?:c\.\s*)?1[4-7]\d\d\b"),
         heading_bold_lines=True,
         description_new_block=True,
@@ -223,7 +223,7 @@ def texts_of(ranges: list[tuple[int, int]], ws: list[Word]) -> list[str]:
 
 def test_labels_ignore_spaces_and_ocr_separators() -> None:
     """Labels match letter-spaced and with ':' read as "'." by the OCR; text in the same piece stays outside."""
-    separator = re.compile("[:;'.]")
+    separator = re.compile(r":|;|'\.")
     assert (
         fields.label_length(
             ["P", "r", "o", "v", "e", "n", "a", "n", "c", "e", ":", "Jacob"],
@@ -343,3 +343,17 @@ def test_entry_fields_from_heading_to_notes() -> None:
     assert len(provenance.children) == 2
     notes = found[-1].children
     assert [n.label for n in notes] == ["1", "2"] and notes[-1].last == lines[-1].last
+
+
+def test_boundary_inside_a_joined_token_is_a_conflict() -> None:
+    """A segment that starts or ends inside a token joined by step 2 is counted; one at its edges is not."""
+    from crlb.segmentation.checks import boundary_conflicts
+
+    joined = [(10, 12)]
+    segs = [
+        Seg("field", "a", 11, 20, "test", "probable"),  # starts inside the token
+        Seg("field", "b", 1, 10, "test", "probable"),  # ends inside it
+        Seg("field", "c", 13, 30, "test", "probable"),  # starts after it
+        Seg("field", "d", 10, 12, "test", "probable"),  # covers it exactly
+    ]
+    assert boundary_conflicts(segs, joined) == 2

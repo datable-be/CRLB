@@ -1,3 +1,7 @@
+# The two POC entries, one born-digital and one OCR (chosen from make entries_poc);
+# steps 4 and 5 run on them with --sample
+POC_SAMPLE = XIX (4)/4;II (1)/12c
+
 # Print a bold step header, and echo each command in colour before running it,
 # so commands stand out from their output
 header = @printf '\n\033[1m== %s ==\033[0m\n' '$(1)'
@@ -44,11 +48,17 @@ segment_poc:
 	$(call header,Step 3: segmentation)
 	$(call run,uv run --locked crlb segment run data/poc/crlb.sqlite)
 
-# HTML view of the segmentation of a few entries, in data/poc/review/
+# The entries of both POC documents with their fields and item counts (no text)
+entries_poc:
+	$(call header,Step 3: the catalogue entries)
+	$(call run,uv run --locked crlb segment entries data/poc/crlb.sqlite 19_4_links)
+	$(call run,uv run --locked crlb segment entries data/poc/crlb.sqlite 02_1_links)
+
+# HTML view of the segmentation of the two POC entries, in data/poc/review/
 show_segment_poc:
-	$(call header,Step 3: segmentation of entries on the page)
-	$(call run,uv run --locked crlb segment show data/poc/crlb.sqlite 19_4_links 22 23)
-	$(call run,uv run --locked crlb segment show data/poc/crlb.sqlite 02_1_links 6 10a)
+	$(call header,Step 3: segmentation of the POC entries on the page)
+	$(call run,uv run --locked crlb segment show data/poc/crlb.sqlite 19_4_links 4)
+	$(call run,uv run --locked crlb segment show data/poc/crlb.sqlite 02_1_links 12c)
 
 # The explicit decision after checking: step 4 reads the entries and fields of this run
 accept_segment_poc:
@@ -56,4 +66,4 @@ accept_segment_poc:
 	$(call run,uv run --locked crlb set-active data/poc/crlb.sqlite 3 latest --note "accepted after checking (POC)")
 
 help:
-	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, measure_poc, show_poc, poc, accept_poc, segment_poc, show_segment_poc, accept_segment_poc"
+	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, measure_poc, show_poc, poc, accept_poc, segment_poc, entries_poc, show_segment_poc, accept_segment_poc"
