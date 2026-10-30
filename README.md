@@ -30,7 +30,7 @@ This project turns the volumes of the **Corpus Rubenianum Ludwig Burchard** (CRL
 - One Python package (`src/crlb/`) with a single command, `crlb`, called from the Makefile.
 - uv for the environment and its lock file. No container: model runtimes, models and external tools are pinned and recorded separately.
 - One SQLite database, growing step by step through numbered schema files.
-- A proof of concept first runs every step on two catalogue entries, one born-digital (XIX (4) No. 4) and one OCR (II part 1, No. 12c), with the same code as the full corpus. The proof of concept makes no reference records yet. Step 4 is checked by comparing rules, local models and the PDF.
+- A proof of concept first runs every step on two catalogue entries, one born-digital (XIX (4) No. 4) and one OCR (II part 1, No. 12c), with the same code as the full corpus. The proof of concept makes no reference records yet. Step 4 is checked by comparing rules, local models and the PDF: rules handle the fixed provenance forms best, and a local model (Qwen3.5 4B) fills most of the stages the rules leave, with every answer checked against the source text. A review page per entry shows the PDF next to the extracted records. The Markdown export is deferred until after the proof of concept.
 - CRLB content (PDFs, text, exports, reference records) stays in `data/`, outside git.
 
 The code and documentation are published under the MIT licence; everything in the repository is in English.
@@ -89,6 +89,8 @@ Step 4 uses a local model through the llama.cpp server. The server, the model fi
 3. After a run with each model, compare the two runs: `uv run --locked crlb extract compare data/poc/crlb.sqlite <run a> <run b>`.
 
 Every call is stored in `llm_calls`. The differences, which contain CRLB text, are written to `data/poc/review/`.
+
+To check the result, `make review_extract_poc` (`crlb extract review`) writes one HTML page per entry to `data/poc/review/`, built from the active step 4 runs. The PDF pages are on the left, with each provenance stage coloured by how it was extracted (rules, the model, or no row). The extracted records are on the right, with the rejected model answers. Pointing at a record highlights its source words in the PDF.
 
 ## AI usage
 

@@ -106,7 +106,7 @@ Before the whole corpus, every step is run on two catalogue entries: one from XI
 4. **Step 4** for the two entries, in three parts:
     - **Part 1, rules** (`make extract_poc`, then `make accept_extract_poc`): objects for the entry and each copy (identifiers, title, object name, material, dimensions, date, attribution, lost or destroyed, the relation to the entry), exhibitions and literature split into reference and locator, provenance in its fixed forms with the chain and the current location. The two entries have 58 provenance stages: rules handle 40, and 18 are left for the LLM.
     - **Part 2, provenance with a local LLM** for the stages that rules leave. The models are Qwen3.5 4B and Ministral 3 8B, compared on the same items in llama.cpp `llama-server` (see "Models").
-    - **Part 3**: the review page per entry and the Markdown export (faithful version).
+    - **Part 3, review page** (`make review_extract_poc`, `crlb extract review`): one HTML page per entry in `data/poc/review/`, built from the active runs. The PDF pages are on the left, with each provenance stage coloured by how it was extracted (rules, the LLM, or no row). The objects are on the right: the entry and its copies, with identifiers, attributions, dimensions, the provenance chain, exhibitions, literature, the stages without a row, and the rejected LLM answers. Pointing at a row highlights its source words in the PDF. The Markdown export (faithful version) is deferred until after the POC demo.
 
     Reference records are not made in the POC. Instead, the measurement uses what needs no ground truth: rejected LLM answers, agreement between the rules and the LLM on the stages both handle, agreement between the two models, and a check of the review pages.
 

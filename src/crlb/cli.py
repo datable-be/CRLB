@@ -6,7 +6,7 @@ from types import ModuleType
 from crlb import set_active
 from crlb.correction import correct, lexicon, measure, show
 from crlb.database import build
-from crlb.extraction import compare, extract, extract_provenance
+from crlb.extraction import compare, extract, extract_provenance, review
 from crlb.ocr import analyse_specimens, sample_specimens
 from crlb.segmentation import entries, segment
 from crlb.segmentation import show as segment_show
@@ -58,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_command(extract_commands, "run", extract)
     add_command(extract_commands, "provenance", extract_provenance)
     add_command(extract_commands, "compare", compare)
+    add_command(extract_commands, "review", review)
 
     add_command(commands, "set-active", set_active)
 
