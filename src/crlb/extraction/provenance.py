@@ -18,6 +18,7 @@ import itertools
 import re
 import sqlite3
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from crlb.extraction import dates, vocabularies
@@ -163,6 +164,11 @@ def parse_holder(
         holder, note = parts[0], None  # life dates stay with the holder
     if ";" in holder:
         return None
+    # A holder is a name ('baron Ferdinand du Bois') or a kind of collection ('private collection')
+    if not re.search(r"[A-Z]", holder) and not vocabularies.longest_keyword(
+        holder, "collection_type_map"
+    ):
+        return None
     if VERBS.search(re.sub(r"\([^()]*\)", "", holder)) or re.search(
         r"\d{4}", re.sub(r"\([^()]*\)", "", holder)
     ):
@@ -234,7 +240,8 @@ class ChainRow:
 
     position: int
     node: Node
-    stage: Stage | None  # None: left for the LLM
+    stage: Stage | None  # None: left for the LLM, or no holder or sale
+    method: str = "rules"
     removal_date: str | None = None
     removal_derived: bool = False
     consignor_derived: bool = False
@@ -251,9 +258,15 @@ def stage_start(stage: Stage | None) -> str | None:
 
 
 def build_chain(
-    items: list[Node], current: tuple[Node, Location] | None
+    items: list[Node],
+    current: tuple[Node, Location] | None,
+    model: Callable[[int], Stage | None] | None = None,
 ) -> list[ChainRow]:
-    """Return the chain of an object: its provenance items in order, then the current location."""
+    """Return the chain of an object: its provenance items in order, then the current location.
+
+    Rules parse each stage; with a model, the stages that rules leave are given
+    to model(index of the item), before the values derived from neighbours.
+    """
     rows = [
         ChainRow(i + 1, item, parse_stage(item.text)) for i, item in enumerate(items)
     ]
@@ -261,6 +274,10 @@ def build_chain(
     for row in rows[:-1]:
         if row.stage and row.stage.kind == "current":
             row.stage = None
+    if model is not None:
+        for i, row in enumerate(rows):
+            if row.stage is None:
+                row.stage, row.method = model(i), "llm"
     merged = (
         rows[-1].stage
         if rows and rows[-1].stage and rows[-1].stage.kind == "current"
@@ -298,7 +315,7 @@ def build_chain(
 
 
 def insert_row(
-    conn: sqlite3.Connection, run_id: int, object_id: int, row: ChainRow, method: str
+    conn: sqlite3.Connection, run_id: int, object_id: int, row: ChainRow
 ) -> None:
     """Store one row of the chain as a collection stay or an auction."""
     stage = row.stage
@@ -315,7 +332,7 @@ def insert_row(
             note="the last provenance stage is merged into the current location"
             if stage
             else None,
-            method=method,
+            method=row.method,
             position=row.position,
             holder_text=location.holder,
             collection_type_label=location.collection_type,
@@ -335,7 +352,7 @@ def insert_row(
             row.node,
             run_id,
             object_id=object_id,
-            method=method,
+            method=row.method,
             position=row.position,
             auction_label=stage.label,
             auction_organizer_label=stage.organiser,
@@ -360,7 +377,7 @@ def insert_row(
         row.node,
         run_id,
         object_id=object_id,
-        method=method,
+        method=row.method,
         position=row.position,
         holder_text=stage.holder,
         collection_type_label=stage.collection_type,
@@ -382,8 +399,13 @@ def extract_entry(
     entry: Entry,
     object_ids: dict[int, int],
     counts: Counter[str],
+    model: Callable[[list[Node], int], Stage | None] | None = None,
 ) -> None:
-    """Store the provenance chains of an entry and its copies; count the stages left for the LLM."""
+    """Store the provenance chains of an entry and its copies.
+
+    Without a model, the stages that rules leave are only counted; with one,
+    model(items, index) gives their stage.
+    """
     for owner in object_nodes(entry):
         items = [
             item
@@ -392,11 +414,16 @@ def extract_entry(
             if item.kind == "item"
         ]
         current = entry_location(owner) if owner is entry.node else copy_location(owner)
-        for row in build_chain(items, current):
+        ask = None if model is None else (lambda i, items=items: model(items, i))
+        for row in build_chain(items, current, ask):
             if row.stage is None and not row.is_current:
-                counts["provenance: stages left for the LLM"] += 1
+                counts[
+                    "provenance: stages left for the LLM"
+                    if model is None
+                    else "provenance: stages without a row (no holder or sale, or answer rejected)"
+                ] += 1
                 continue
-            insert_row(conn, run_id, object_ids[owner.id], row, "rules")
+            insert_row(conn, run_id, object_ids[owner.id], row)
             if row.is_current:
                 counts["provenance: current locations"] += 1
                 counts["provenance: last stage merged into the current location"] += (
@@ -404,7 +431,8 @@ def extract_entry(
                 )
             else:
                 assert row.stage is not None
-                counts[f"provenance: {row.stage.kind} stages by rules"] += 1
+                by = "rules" if row.method == "rules" else "the LLM"
+                counts[f"provenance: {row.stage.kind} stages by {by}"] += 1
                 counts["provenance: removal dates derived from the next stage"] += (
                     row.removal_derived
                 )

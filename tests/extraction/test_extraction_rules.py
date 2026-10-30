@@ -299,6 +299,7 @@ def test_holder() -> None:
         "mentioned in the apartments of the court painters at the Madrid Palace, 1 August 1694);",
         "Sir Wathen Arthur Waller (1881– 1947), 5th Baronet;",
         "Imperial Collection Vienna as of 1733.",
+        "and",
     ],
 )
 def test_stages_left_for_the_llm(text: str) -> None:

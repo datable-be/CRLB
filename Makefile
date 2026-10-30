@@ -77,5 +77,23 @@ accept_extract_poc:
 	$(call run,uv run --locked crlb set-active data/poc/crlb.sqlite 4:references latest --note "accepted after checking (POC)")
 	$(call run,uv run --locked crlb set-active data/poc/crlb.sqlite 4:provenance latest --note "accepted after checking (POC)")
 
+# The local model server for step 4, part 2 (llama.cpp, CPU build b11606): run one in a
+# separate terminal and leave it running while extract_llm_poc runs
+LLAMA_SERVER = data/tools/llama.cpp-b11606/llama-b11606/llama-server
+LLAMA_OPTIONS = --host 127.0.0.1 --port 8080 --ctx-size 8192 --parallel 1 --threads 4 --reasoning off
+
+serve_qwen:
+	$(call header,Step 4: model server with Qwen3.5 4B)
+	$(call run,$(LLAMA_SERVER) -m data/models/Qwen3.5-4B-Q4_K_M.gguf $(LLAMA_OPTIONS))
+
+serve_ministral:
+	$(call header,Step 4: model server with Ministral 3 8B)
+	$(call run,$(LLAMA_SERVER) -m data/models/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf $(LLAMA_OPTIONS))
+
+# Provenance with rules and the model of the running server, also compared with the rules
+extract_llm_poc:
+	$(call header,Step 4: provenance with the local model)
+	$(call run,uv run --locked crlb extract provenance data/poc/crlb.sqlite --compare-rules --sample "$(POC_SAMPLE)")
+
 help:
-	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, measure_poc, show_poc, poc, accept_poc, segment_poc, entries_poc, show_segment_poc, accept_segment_poc, extract_poc, accept_extract_poc"
+	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, measure_poc, show_poc, poc, accept_poc, segment_poc, entries_poc, show_segment_poc, accept_segment_poc, extract_poc, accept_extract_poc, serve_qwen, serve_ministral, extract_llm_poc"

@@ -80,8 +80,21 @@ The tables of `crlb.sqlite`:
 
 The step 1 tables are never changed after the build. Later steps add their own tables, which refer to `words`, `pages` and `documents`.
 
+## Local models
+
+Step 4 uses a local model through the llama.cpp server. The server, the model files and the prompt examples are kept in `data/`, outside git. The models are pinned by repository, commit and SHA-256 in `data_manifest/models.csv`.
+
+1. Start a server in a separate terminal: `make serve_qwen` or `make serve_ministral`.
+2. Run the provenance with that model, compared with the rules: `make extract_llm_poc`.
+3. After a run with each model, compare the two runs: `uv run --locked crlb extract compare data/poc/crlb.sqlite <run a> <run b>`.
+
+Every call is stored in `llm_calls`. The differences, which contain CRLB text, are written to `data/poc/review/`.
+
 ## AI usage
 
 - In development:
     - Claude Code Opus 5.5
     - Gemini 3.6 Flash
+- In data processing (step 4, proof of concept), run locally with llama.cpp `llama-server` build b11606 (CPU):
+    - Qwen3.5 4B, Q4_K_M (`unsloth/Qwen3.5-4B-GGUF`)
+    - Ministral 3 8B Instruct 2512, Q4_K_M (`mistralai/Ministral-3-8B-Instruct-2512-GGUF`)

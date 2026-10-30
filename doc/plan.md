@@ -1161,6 +1161,31 @@ Known gaps:
 - **Entry attribution** (decided): an entry gets no attribution row. Its attribution to Rubens goes without saying in the catalogue. Only attributions stated in the text, such as those of copies, are recorded.
 - **Order in locations**: a location such as `R. Lauwers, Mechelen, 2016` gets the order of place and holder wrong. The rules assume the place comes first, unless the first part names a type of collection.
 
+### POC findings (part 2, local LLM)
+
+`crlb extract provenance --compare-rules` runs the rules first and gives the model the stages that rules leave. It also asks the model for the stages that rules handled, and compares those answers with the rules without storing them as rows. `crlb extract compare` compares two model runs from `llm_calls`, without calling a model again.
+
+The prompt (`prompts/provenance_stage.md`) is in git. Its examples contain CRLB text, so they are in `data/prompts/`: five stages from other XIX (4) entries, which are checked like answers when the prompt is loaded. The JSON schema is built from the RO value lists, so the choices cannot drift from them. Spans are matched up to whitespace and the kind of quote character, and are then stored as written in the source.
+
+Results on the 57 calls for the two POC entries: 18 stages that rules leave, and 39 that rules handled.
+
+|                                                         | Qwen3.5 4B (run 5) | Ministral 3 8B (run 6) |
+| :------------------------------------------------------ | -----------------: | ---------------------: |
+| time per call                                           |               24 s |                   40 s |
+| whole run                                               |             23 min |                 38 min |
+| answers rejected by the checks                          |                  4 |                      8 |
+| answers `other` (no holder or sale)                     |                  3 |                      3 |
+| rows added to the rules (of 18 stages)                  |                 13 |                     13 |
+| parts that differ from the rules (39 stages × 13 parts) |                 15 |                     14 |
+
+- **The checks work.** Every rejected answer had text that is not in the stage. Ministral "corrects" OCR (`Caftle` → `Castle`, `Colledions` → `Collections`), and takes the consignor of `his sale` from the previous stage (four times). Both models sometimes take a holder or place from the previous stage, against rule 1 of the prompt.
+- **On the fixed forms, rules are better than either model.** The models make mistakes such as reading `X, sale, …` as a collection, writing `150 florins` as the price, or marking a sale as uncertain because of `[possibly this picture]` in its note. The comparison with the rules found one rules error: a stray `and` (from `prov. and lit.`) read as a holder, which is now fixed.
+- **On the stages that rules leave,** the model rows are mostly right: `acquired by Balthasar Moretus between …`, `purchased … by Charles II, King of Spain`. There are real errors too: `the apartments of the court painters` taken as a holder, and the dealers `Asscher, Koetser and Welker` read as a sale. A stage with two holders (`Cobentzl, from whom it was purchased by Catherine II`) gives one row, with the purchase given to the wrong holder. This is a limit of one stage giving one row.
+- **The two models agree** on 89–100% of the parts of the 45 stages that both answered validly. They disagree most on collection type (7), holder, consignor and transfer method.
+- **Speed:** generation runs at about 4 tokens per second, half the estimate. The prompt prefix is read once (about 75 s) and then cached, so the time per call is almost all the answer of about 90 tokens. At about 24 s per stage, the 348 stages that rules leave in XIX (4) and II (1) would take about 2.3 hours. A whole corpus of tens of thousands of stages is out of reach on this machine, as the plan expected.
+
+**Recommendation:** Qwen3.5 4B for the local runs. It is faster, has fewer rejected answers, and is as close to the rules as Ministral. Before a full run, an annotator should review the model rows, through the review page of part 3, and set the threshold.
+
 ### LLM tasks
 
 Each task is one prompt with a JSON schema, both in git (`src/crlb/extraction/prompts/<task>.md` and `.json`), with a few examples taken from the development set. Input is one item plus minimal context (the field name, the previous stage for provenance).
