@@ -40,26 +40,42 @@ class Entry:
     node: Node
 
 
-def joined_text(conn: sqlite3.Connection, first: int, last: int) -> str:
-    """Return the effective text of a word range, with words broken by a hyphen at the end of a line rejoined."""
-    tokens = text.tokens(conn, first, last)
-    if not tokens:
-        return ""
-    lines = {
+def word_lines(
+    conn: sqlite3.Connection, first: int, last: int
+) -> dict[int, tuple[int, int, int]]:
+    """Return the (page, block, line) of every word of a range."""
+    return {
         word_id: (page_id, block_no, line_no)
         for word_id, page_id, block_no, line_no in conn.execute(
             "SELECT id, page_id, block_no, line_no FROM words WHERE id BETWEEN ? AND ?",
             (first, last),
         )
     }
+
+
+def broken_word(
+    previous: text.TextToken,
+    token: text.TextToken,
+    lines: dict[int, tuple[int, int, int]],
+) -> bool:
+    """Return whether two tokens are one word broken by a hyphen at the end of a line."""
+    # 'Plantin-' at the end of a line and 'Moretus' on the next: one word
+    return (
+        previous.text.endswith("-")
+        and len(previous.text) > 1
+        and lines[previous.last_word_id] != lines[token.first_word_id]
+    )
+
+
+def joined_text(conn: sqlite3.Connection, first: int, last: int) -> str:
+    """Return the effective text of a word range, with words broken by a hyphen at the end of a line rejoined."""
+    tokens = text.tokens(conn, first, last)
+    if not tokens:
+        return ""
+    lines = word_lines(conn, first, last)
     parts = [tokens[0].text]
     for previous, token in itertools.pairwise(tokens):
-        # 'Plantin-' at the end of a line and 'Moretus' on the next: one word
-        broken = (
-            previous.text.endswith("-")
-            and len(previous.text) > 1
-            and lines[previous.last_word_id] != lines[token.first_word_id]
-        )
+        broken = broken_word(previous, token, lines)
         parts.append(token.text if broken else " " + token.text)
     return "".join(parts)
 

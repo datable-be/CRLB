@@ -37,7 +37,7 @@ src/crlb/
 tests/                  one folder per subpackage, as now
 ```
 
-- **CLI:** `crlb <command>`, declared in `pyproject.toml` under `[project.scripts]`. Examples: `crlb list-pdfs`, `crlb build`, `crlb lexicon`, `crlb correct run`, `crlb segment`, `crlb extract provenance`, `crlb normalise`, `crlb export markdown`, `crlb set-active <step> <run>`, `crlb ocr sample`. `crlb --help` lists them all. Only the standard library (`argparse`) is used for the CLI.
+- **CLI:** `crlb <command>`, declared in `pyproject.toml` under `[project.scripts]`. Examples: `crlb list-pdfs`, `crlb build`, `crlb lexicon`, `crlb correct run`, `crlb segment`, `crlb extract provenance`, `crlb extract markdown`, `crlb normalise`, `crlb set-active <step> <run>`, `crlb ocr sample`. `crlb --help` lists them all. Only the standard library (`argparse`) is used for the CLI.
 - **Makefile** targets call the CLI (`uv run --locked crlb build data_manifest/documents.csv data`), so the usual `make <target>` workflow stays, and `make help` lists the targets.
 - **Shared code** lives once in the core modules: opening the database and the PDFs (`db.py`, with `open_pdf` checking the hash), run bookkeeping (`runs.py`), the effective text (`text.py`), the LLM interface (`llm.py`, used by steps 2c, 4 and 5) and reviews (`review.py`).
 - **Tests** import `crlb` as an installed package; the per-folder `pythonpath`, ruff `src` and ty `extra-paths` settings are no longer needed. The OCR quality test lives in `crlb.ocr` (`crlb ocr sample`, `crlb ocr analyse`); `scripts/archive` holds earlier scripts, kept as they are and excluded from ruff and ty.
@@ -106,7 +106,8 @@ Before the whole corpus, every step is run on two catalogue entries: one from XI
 4. **Step 4** for the two entries, in three parts:
     - **Part 1, rules** (`make extract_poc`, then `make accept_extract_poc`): objects for the entry and each copy (identifiers, title, object name, material, dimensions, date, attribution, lost or destroyed, the relation to the entry), exhibitions and literature split into reference and locator, provenance in its fixed forms with the chain and the current location. The two entries have 58 provenance stages: rules handle 40, and 18 are left for the LLM.
     - **Part 2, provenance with a local LLM** for the stages that rules leave. The models are Qwen3.5 4B and Ministral 3 8B, compared on the same items in llama.cpp `llama-server` (see "Models").
-    - **Part 3, review page** (`make review_extract_poc`, `crlb extract review`): one HTML page per entry in `data/poc/review/`, built from the active runs. The PDF pages are on the left, with each provenance stage coloured by how it was extracted (rules, the LLM, or no row). The objects are on the right: the entry and its copies, with identifiers, attributions, dimensions, the provenance chain, exhibitions, literature, the stages without a row, and the rejected LLM answers. Pointing at a row highlights its source words in the PDF. The Markdown export (faithful version) is deferred until after the POC demo.
+    - **Part 3, review page** (`make review_extract_poc`, `crlb extract review`): one HTML page per entry in `data/poc/review/`, built from the active runs. The PDF pages are on the left, with each provenance stage coloured by how it was extracted (rules, the LLM, or no row). The objects are on the right: the entry and its copies, with identifiers, attributions, dimensions, the provenance chain, exhibitions, literature, the stages without a row, and the rejected LLM answers. Pointing at a row highlights its source words in the PDF.
+    - **Part 4, Markdown export** (`make markdown_poc`, `crlb extract markdown`): the faithful version of each entry in `data/poc/entries/<part>/<number>.md` (see "Entry export"). The notes are a `## Notes` section until step 3 fills `note_refs`; copies and notes keep their printed numbers. The display version is deferred.
 
     Reference records are not made in the POC. Instead, the measurement uses what needs no ground truth: rejected LLM answers, agreement between the rules and the LLM on the stages both handle, agreement between the two models, and a check of the review pages.
 
@@ -1297,6 +1298,8 @@ Two versions per entry, following "Analyses entries":
 - **faithful:** the corrected text (step 2) as printed, with figure references and `Ibid.` as in the book;
 - **display:** for Rubens Online, with figure references removed and `Ibid.`/`op. cit.` written out (`text_display` of `ro_text_paragraphs` and `ro_text_notes`).
 
+In the POC only the faithful version exists. Until step 3 links the note markers (`note_refs`), the notes are a `## Notes` section instead of footnotes, and copies and notes are lists that keep their printed numbers (a copy missed by step 3 would otherwise renumber the rest). Paragraphs of the description are found by first-line indents.
+
 Characters with a meaning in Markdown (`*`, `_`, `#`, `[`, `` ` ``, `<`) are escaped where they occur in the text; OCR note markers are often `*`.
 
 Files are written to `data/entries/<part>/<catalogue number>.md` and `…-display.md`, outside git (they contain the CRLB text). Entities and links to authorities (step 5) are not marked in the Markdown; they are available in the database and the JSON export.
@@ -1326,7 +1329,7 @@ The design for the full corpus:
 - `crlb/extraction/prompts/`: one prompt and one JSON schema per task.
 - `crlb/extraction/vocabularies/`: the RO value lists used (Object names, Material_support, Attribution status, Transfer method, Collection Type, Currencies, Inscription Type, Source Types, Artistic relation types) as CSV with label and URI, and the CRLB-to-RO mapping tables.
 - `crlb extract review`: writes a local review file per entry (the PDF region next to the extracted rows) to `data/`, never to the console.
-- `crlb export ro` and `crlb export markdown`: the RO JSON records and the Markdown files of the entries, from the active runs.
+- `crlb export ro` and `crlb extract markdown`: the RO JSON records and the Markdown files of the entries, from the active runs.
 - `crlb reference prefill | import`: pre-filled reference records (JSON per entry, in `data/reference/`) from the RKD/Axiell export or a rules run; checking and loading hand-made records as a `reference` run.
 - `data_manifest/reference_selection.csv` (in git): the selected entries with their development/test assignment.
 - `crlb extract compare`: compares an extraction run with the reference run per table and property, and writes the metrics (counts to the console, details to `data/`).

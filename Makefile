@@ -99,5 +99,10 @@ review_extract_poc:
 	$(call header,Step 4: review pages of the active extraction runs)
 	$(call run,uv run --locked crlb extract review data/poc/crlb.sqlite --sample "$(POC_SAMPLE)")
 
+# Markdown of the two POC entries (faithful version), in data/poc/entries/
+markdown_poc:
+	$(call header,Step 4: Markdown export of the entries)
+	$(call run,uv run --locked crlb extract markdown data/poc/crlb.sqlite --sample "$(POC_SAMPLE)")
+
 help:
-	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, measure_poc, show_poc, poc, accept_poc, segment_poc, entries_poc, show_segment_poc, accept_segment_poc, extract_poc, accept_extract_poc, serve_qwen, serve_ministral, extract_llm_poc, review_extract_poc"
+	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, measure_poc, show_poc, poc, accept_poc, segment_poc, entries_poc, show_segment_poc, accept_segment_poc, extract_poc, accept_extract_poc, serve_qwen, serve_ministral, extract_llm_poc, review_extract_poc, markdown_poc"
