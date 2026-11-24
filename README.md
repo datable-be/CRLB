@@ -96,7 +96,7 @@ To check the result, `make review_extract_poc` (`crlb extract review`) writes on
 
 - In development:
     - Claude Code Opus 5.5
-    - Gemini 3.6 Flash
+    - Gemini 3.6 Flash, 4 Hydrogen
 - In data processing (step 4, proof of concept), run locally with llama.cpp `llama-server` build b11606 (CPU):
     - Qwen3.5 4B, Q4_K_M (`unsloth/Qwen3.5-4B-GGUF`)
     - Ministral 3 8B Instruct 2512, Q4_K_M (`mistralai/Ministral-3-8B-Instruct-2512-GGUF`)
