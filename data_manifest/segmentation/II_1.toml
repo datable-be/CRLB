@@ -36,3 +36,11 @@ description_min_size = 8.2
 # by a gap and sets in italics: the material runs on until a sentence ends.
 # The OCR reads "mark" as "marie", "mad:" or "made".
 material_continues = '\bma\w{1,3}:? of Brussels\b'
+# The notes at the foot of the last page are set in 7.5-8.0 pt (the OCR's
+# sizes vary by half a point), the description in 8.5 pt
+notes_max_size = 8.1
+# The OCR damaged some first note numbers ("' See above"): the notes may start at 2 or 3
+first_note_max = 3
+# Note markers are digits after a word ("connect it.2"); the OCR gives them the
+# style of the word, so the style is not required
+marker_requires_style = false

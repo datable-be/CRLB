@@ -470,3 +470,19 @@ def test_another_version_is_a_copies_label() -> None:
         )
         == 14
     )
+
+
+def test_notes_may_start_after_a_damaged_first_number() -> None:
+    """With first_note_max = 3, notes starting at 2 are found; by default they must start at 1."""
+    b = PageBuilder()
+    b.page(
+        ("' See above, pp. 103, 104.", 0.80, 7.5, 0),
+        ("2 Discussed in the Chapter.", 0.82, 7.5, 0),
+        ("3 Correspondence by Le Monnier.", 0.84, 7.5, 0),
+    )
+    lines = b.pages[0]
+    loose = dataclasses.replace(
+        BASE.fields, note_number=re.compile(r"^(?P<number>\d+)\.?$"), first_note_max=3
+    )
+    assert [n.label for n in fields.notes(lines, loose)] == ["2", "3"]
+    assert fields.notes(lines, BASE.fields) == []

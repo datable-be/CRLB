@@ -94,3 +94,24 @@ def test_front_matter_values_are_json() -> None:
     for line in lines[1:-1]:
         key, _, value = line.partition(": ")
         assert json.loads(value) == values[key]
+
+
+def test_a_marker_becomes_a_footnote_reference() -> None:
+    """A piece with a footnote gets its reference after the escaped text, inside an italic run."""
+    stats = Stats()
+    out = markdown.render(
+        [
+            Piece("in", False, "10", False, False),
+            Piece("1630?).", False, "10", False, False, "1"),
+            Piece("Moretus*", True, "10", False, False, "2"),
+        ],
+        stats,
+    )
+    assert out == [r"in 1630?).[^1] *Moretus\*[^2]*"]
+    assert stats.footnotes == 2
+
+
+def test_note_numbers_are_stripped_with_or_without_a_full_stop() -> None:
+    """'1\\. Liedtke' (born-digital) and '1 A search' (OCR) both lose their number."""
+    assert markdown.NOTE_NUMBER.sub("", r"1\. Liedtke", count=1) == "Liedtke"
+    assert markdown.NOTE_NUMBER.sub("", "1 A search", count=1) == "A search"

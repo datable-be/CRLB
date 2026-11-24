@@ -43,7 +43,7 @@ CREATE TABLE printed_pages (
     PRIMARY KEY (run_id, page_id)
 );
 
--- Note markers in the text, linked to their note (not filled in the POC).
+-- Note markers in the text, linked to their note.
 CREATE TABLE note_refs (
     id               INTEGER PRIMARY KEY,
     run_id           INTEGER NOT NULL REFERENCES segmentation_runs(id),

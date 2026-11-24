@@ -3,11 +3,11 @@
 The file holds the text of the entry as printed (the effective text of step 2,
 without page furniture), in the structure of step 3: YAML front matter, the
 heading, the unlabelled fields as paragraphs, the labelled fields under `##`
-headings, the copies and the notes as numbered lists. Italics come from the
-font flags of step 1, printed page breaks become HTML comments. The notes are
-a section of their own until step 3 links their markers in the text (note_refs);
-then they become footnotes. CRLB text goes only into these local files; the
-console shows the file names and counts.
+headings, the copies as a list. A note whose marker step 3 found in the text
+(note_refs) becomes a footnote at the marker; the other notes are a list under
+`## Notes`. Italics come from the font flags of step 1, printed page breaks
+become HTML comments. CRLB text goes only into these local files; the console
+shows the file names and counts.
 """
 
 import argparse
@@ -43,7 +43,7 @@ HEADINGS = {
 ESCAPE = re.compile(r"([\\*_#\[\]`<>])")
 LIST_START = re.compile(r"^(\d+)([.)])|^([-+])(?=\s|$)")
 COPY_LABEL = re.compile(r"^\(\s*[^)\s]{1,6}\s*\)\s*")
-NOTE_NUMBER = re.compile(r"^\d+\\?[.)]\s*")
+NOTE_NUMBER = re.compile(r"^\d+(?:\\?[.)])?\s+|^\d+\\?[.)]")
 # A first-line indent: further right than the column's left edge, by this much (points)
 INDENT = (4.0, 25.0)
 # Font sizes (points): a change of paragraph, and a line smaller than the body text.
@@ -61,6 +61,7 @@ class Piece:
     printed: str | None  # printed page number of its page
     joined: bool  # no space before it: the rest of a word broken at the end of a line
     paragraph: bool  # it starts a new paragraph
+    footnote: str | None = None  # the note its marker refers to
 
 
 @dataclass
@@ -70,6 +71,7 @@ class Stats:
     paragraphs: int = 0
     italic_runs: int = 0
     page_breaks: int = 0
+    footnotes: int = 0
 
 
 def escape(value: str) -> str:
@@ -117,6 +119,9 @@ def render(pieces: list[Piece], stats: Stats) -> list[str]:
             italic = True
             stats.italic_runs += 1
         out.append(escape(piece.text))
+        if piece.footnote:
+            out.append(f"[^{piece.footnote}]")
+            stats.footnotes += 1
         previous = piece
     close()
     stats.paragraphs += len(paragraphs)
@@ -187,6 +192,15 @@ class Exporter:
             ).fetchall()
         )
         self.starts: dict[int, list[float]] = {}
+        # The note markers: word -> note number, and the notes that have one
+        refs = conn.execute(
+            "SELECT r.word_id, n.id, n.label FROM note_refs r JOIN segments n ON n.id = r.note_segment_id"
+            " WHERE r.run_id = ?",
+            (segmentation,),
+        ).fetchall()
+        self.markers = {word_id: label for word_id, _, label in refs}
+        self.referenced = {note_id for _, note_id, _ in refs}
+        self.definitions: list[str] = []
 
     def page_starts(self, page_id: int) -> list[float]:
         """Return the column edges of a page."""
@@ -250,8 +264,19 @@ class Exporter:
                     )
                 if joined:
                     italic = result[-1].italic
+            text, footnote = token.text, None
+            marked = [
+                self.markers[w]
+                for w in range(token.first_word_id, token.last_word_id + 1)
+                if w in self.markers
+            ]
+            if marked and text.endswith(marked[-1]):
+                # '1630?).1': the digits become the footnote reference
+                text, footnote = text[: -len(marked[-1])], marked[-1]
             result.append(
-                Piece(token.text, italic, self.printed.get(page_id), joined, paragraph)
+                Piece(
+                    text, italic, self.printed.get(page_id), joined, paragraph, footnote
+                )
             )
         return result
 
@@ -285,8 +310,14 @@ class Exporter:
             if text:
                 pattern = COPY_LABEL if child.kind == "copy" else NOTE_NUMBER
                 text[0] = pattern.sub("", text[0], count=1)
+            if child.id in self.referenced:
+                # A note with its marker in the text: a footnote at the end of the file
+                self.definitions.append(f"[^{child.label}]: {' '.join(text)}")
+                continue
             marker = child.label if child.kind == "copy" else f"{child.label}."
             items.append(list_item(marker or "", text))
+        if not items:
+            return ""
         return heading + "\n\n" + "\n".join(items)
 
     def entry(
@@ -330,7 +361,9 @@ class Exporter:
             ],
             "runs": runs,
         }
+        self.definitions = []
         body = [self.field(f, counts) for f in node.children if f.kind == "field"]
+        body += self.definitions
         return front_matter(meta) + "\n" + "\n\n".join(
             b for b in body if b
         ) + "\n", counts
@@ -380,6 +413,6 @@ def run(args: argparse.Namespace) -> None:
     s = exporter.stats
     print(
         f"{len(entries)} files: {s.paragraphs} paragraphs, {s.italic_runs} italic runs,"
-        f" {s.page_breaks} page breaks"
+        f" {s.page_breaks} page breaks, {s.footnotes} footnotes"
     )
     conn.close()

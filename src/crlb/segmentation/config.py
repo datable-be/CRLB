@@ -49,6 +49,10 @@ class Fields:
     copy_labels: dict[str, list[str]]
     # a material matching this runs on until a line ends a sentence (tapestry marks)
     material_continues: re.Pattern[str] | None = None
+    # the notes may start at a higher number when the OCR damaged the first ones
+    first_note_max: int = 1
+    # a note marker (digits at the end of a word) must be set in another style than the word
+    marker_requires_style: bool = True
 
 
 @dataclass(frozen=True)
@@ -129,6 +133,8 @@ def parse(raw: dict[str, Any], path: str, sha256: str) -> Config:
             material_continues=re.compile(fields["material_continues"])
             if "material_continues" in fields
             else None,
+            first_note_max=fields.get("first_note_max", 1),
+            marker_requires_style=fields.get("marker_requires_style", True),
             notes_max_size=fields.get("notes_max_size", 0.0),
             note_number=re.compile(fields.get("note_number", "$^")),
             item_fields=fields.get("item_fields", []),

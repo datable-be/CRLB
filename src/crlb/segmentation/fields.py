@@ -390,9 +390,13 @@ def notes(lines: list[Line], fields: Fields) -> list[Seg]:
     expected = 1
     for k, line in enumerate(lines):
         match = fields.note_number.match(line.words[0].text)
-        if match and int(match["number"]) == expected:
+        # The first note may have a higher number when the OCR damaged the ones before it
+        if match and (
+            int(match["number"]) == expected
+            or (not starts and int(match["number"]) <= fields.first_note_max)
+        ):
             starts.append((k, match["number"]))
-            expected += 1
+            expected = int(match["number"]) + 1
     result = []
     for j, (k, number) in enumerate(starts):
         end = starts[j + 1][0] if j + 1 < len(starts) else len(lines)
@@ -462,7 +466,7 @@ def entry_fields(
                 for j in range(description + 1, len(lines))
                 if lines[j].size <= fields.notes_max_size
                 and (m := fields.note_number.match(lines[j].words[0].text))
-                and m["number"] == "1"
+                and 1 <= int(m["number"]) <= fields.first_note_max
             ),
             None,
         )

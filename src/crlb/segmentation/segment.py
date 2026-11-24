@@ -16,7 +16,7 @@ from pathlib import Path
 from crlb import db
 from crlb.runs import git_commit, utc_now
 from crlb.sample import SampleItem, add_sample_option, sample_parts
-from crlb.segmentation import checks, fields, rules
+from crlb.segmentation import checks, fields, markers, rules
 from crlb.segmentation.config import Config, load_configs
 from crlb.segmentation.model import Seg, load_document
 from crlb.text import CORRECTION_STEP, active_run
@@ -99,6 +99,11 @@ def segment_document(
         )
 
     insert_segments(conn, run_id, document_id, furniture + sections)
+    found, total = markers.insert_note_refs(
+        conn, run_id, document_id, config.fields.marker_requires_style
+    )
+    if total:
+        counts["notes with a marker in the text"] = found
     page_ids = dict(
         conn.execute(
             "SELECT page_index, id FROM pages WHERE document_id = ?", (document_id,)
