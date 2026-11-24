@@ -1,0 +1,9 @@
+part,rule,ocr,correct,position,note
+II (1),S1,d,ct,any,ct ligature read as d (Colledion)
+II (1),S1,â,ct,any,ct ligature read as â (colleâion)
+II (1),S1,ft,ct,any,ct ligature read as ft (correft)
+II (1),S1,ft,st,any,st ligature read as ft (firft)
+II (1),S1,M,st,inner,st ligature read as M (KunMpatrimonium)
+II (1),S1,S,st,inner,st ligature read as S (AuguS)
+II (1),S2,St,st,inner,st ligature read with a capital (KunSt)
+II (1),S1,faft,fact,word,"fact or fast as a ligature: always fact in this volume (all 38 checked in context, 2026-11-24)"

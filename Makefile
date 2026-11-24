@@ -27,6 +27,10 @@ correct_poc:
 	$(call header,Step 2a: OCR space repair (R1–R3))
 	$(call run,uv run --locked crlb correct run data/poc/crlb.sqlite)
 
+substitute_poc:
+	$(call header,Step 2b: OCR ligature substitutions (S1, S2) on the active run)
+	$(call run,uv run --locked crlb correct substitute data/poc/crlb.sqlite data_manifest/substitutions.csv)
+
 measure_poc:
 	$(call header,Step 2: measurement against the specimen pages)
 	$(call run,uv run --locked crlb correct measure data/poc/crlb.sqlite doc/CRLB_pdfs/specimens data_manifest/specimen_split.csv)
@@ -105,4 +109,4 @@ markdown_poc:
 	$(call run,uv run --locked crlb extract markdown data/poc/crlb.sqlite --sample "$(POC_SAMPLE)")
 
 help:
-	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, measure_poc, show_poc, poc, accept_poc, segment_poc, entries_poc, show_segment_poc, accept_segment_poc, extract_poc, accept_extract_poc, serve_qwen, serve_ministral, extract_llm_poc, review_extract_poc, markdown_poc"
+	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, substitute_poc, measure_poc, show_poc, poc, accept_poc, segment_poc, entries_poc, show_segment_poc, accept_segment_poc, extract_poc, accept_extract_poc, serve_qwen, serve_ministral, extract_llm_poc, review_extract_poc, markdown_poc"

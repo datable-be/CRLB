@@ -4,7 +4,7 @@ import argparse
 from types import ModuleType
 
 from crlb import set_active
-from crlb.correction import correct, lexicon, measure, show
+from crlb.correction import correct, lexicon, measure, show, substitute
 from crlb.database import build
 from crlb.extraction import compare, extract, extract_provenance, markdown, review
 from crlb.ocr import analyse_specimens, sample_specimens
@@ -35,12 +35,17 @@ def build_parser() -> argparse.ArgumentParser:
     add_command(commands, "lexicon", lexicon)
 
     correction = commands.add_parser(
-        "correct", help="OCR correction (step 2a) and its measurement"
+        "correct", help="OCR correction (steps 2a and 2b) and its measurement"
     )
     correction_commands = correction.add_subparsers(
         dest="correct_command", required=True
     )
-    for name, module in (("run", correct), ("measure", measure), ("show", show)):
+    for name, module in (
+        ("run", correct),
+        ("substitute", substitute),
+        ("measure", measure),
+        ("show", show),
+    ):
         add_command(correction_commands, name, module)
 
     segmentation = commands.add_parser(
