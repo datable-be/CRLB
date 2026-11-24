@@ -6,6 +6,8 @@ from types import ModuleType
 from crlb import set_active
 from crlb.correction import correct, lexicon, measure, show, substitute
 from crlb.database import build
+from crlb.enrichment import indexes, normalise, rkd
+from crlb.enrichment import review as normalise_review
 from crlb.extraction import compare, extract, extract_provenance, markdown, review
 from crlb.ocr import analyse_specimens, sample_specimens
 from crlb.segmentation import entries, segment
@@ -65,6 +67,18 @@ def build_parser() -> argparse.ArgumentParser:
     add_command(extract_commands, "compare", compare)
     add_command(extract_commands, "review", review)
     add_command(extract_commands, "markdown", markdown)
+
+    lists = commands.add_parser("lists", help="control lists (step 5a)")
+    lists_commands = lists.add_subparsers(dest="lists_command", required=True)
+    add_command(lists_commands, "indexes", indexes)
+    add_command(lists_commands, "rkd", rkd)
+
+    normalisation = commands.add_parser("normalise", help="normalisation (step 5b)")
+    normalise_commands = normalisation.add_subparsers(
+        dest="normalise_command", required=True
+    )
+    add_command(normalise_commands, "run", normalise)
+    add_command(normalise_commands, "review", normalise_review)
 
     add_command(commands, "set-active", set_active)
 

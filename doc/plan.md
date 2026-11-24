@@ -102,7 +102,7 @@ Before the whole corpus, every step is run on two catalogue entries: one from XI
 
 1. **Step 1:** the manifest lists the two POC PDFs and the OCR files used for measurement (`make build_poc`, about 50 seconds).
 2. **Step 2a** on the two documents: rules R1–R3, the effective text (`crlb.text`) and `crlb set-active`. The lexicon is built from all 31 born-digital volumes, read directly from the PDFs (`data_manifest/lexicon_sources.csv`, about 80 seconds): it covers 96.9% of the ground-truth tokens of the II (1) specimens, against 79.1% for XIX (4) alone. Left out of the POC: the gap investigation, the review sample of 2a, and step 2c. Step 2b was added after the demo for the ligature errors of II (1) (see "Step 2b"; `make substitute_poc`, then `make accept_poc`). Besides the two POC documents, the manifest contains the other OCR files with hand-corrected specimens (II index, XIX (2) and its index, XXVI (2.1) and its index), only for measurement on all 12 specimen pages (6 development, 6 test). `make poc` runs steps 1 and 2a, the measurement and the side-by-side view of XXVI (2.1) p. 393, and stops there: accepting the correction run is a separate, explicit decision (`make accept_poc`, which makes the latest run active) before step 3. It is a decision about the run as a whole; individual wrong joins are corrected later through `reviews`, on top of the active run.
-3. **Step 3** on the two documents in full, since entries are found by segmenting them (`make segment_poc`, about 10 seconds). In the POC: furniture and printed page numbers, sections, entries, fields (heading, material, location, date, labelled fields, description, notes), copies with their sub-fields, items, single notes, the checks and the review view (`crlb segment show`). Left out of the POC: paragraphs (rule 7), items in the abbreviation and exhibition sections, index entries (rule 10), and the comparison with the registration lists. The two POC entries were chosen from the entry list (`make entries_poc`): **XIX (4) No. 4** (Study of two Heads (Plato?), New York; 20 provenance stages, 7 exhibitions, 3 copies, 38 literature references) and **II (1) No. 12c** (The Triumph of Faith: modello, Brussels; 17 provenance stages, 9 exhibitions, 16 copies, 17 literature references). Steps 4 and 5 run on them with `--sample "XIX (4)/4;II (1)/12c"` (`POC_SAMPLE` in the Makefile). As in step 2, the segmentation run is accepted explicitly (`make accept_segment_poc`) before step 4.
+3. **Step 3** on the two documents in full, since entries are found by segmenting them (`make segment_poc`, about 10 seconds). In the POC: furniture and printed page numbers, sections, entries, fields (heading, material, location, date, labelled fields, description, notes), copies with their sub-fields, items, single notes, the checks and the review view (`crlb segment show`). Added for step 5: the entries of the collections and names-and-places indexes (rule 10), in the index sections of XIX (4) and in the separate index document of II (`II_1_index.toml`). Left out of the POC: paragraphs (rule 7), items in the abbreviation and exhibition sections, the subject indexes, and the comparison with the registration lists. The two POC entries were chosen from the entry list (`make entries_poc`): **XIX (4) No. 4** (Study of two Heads (Plato?), New York; 20 provenance stages, 7 exhibitions, 3 copies, 38 literature references) and **II (1) No. 12c** (The Triumph of Faith: modello, Brussels; 17 provenance stages, 9 exhibitions, 16 copies, 17 literature references). Steps 4 and 5 run on them with `--sample "XIX (4)/4;II (1)/12c"` (`POC_SAMPLE` in the Makefile). As in step 2, the segmentation run is accepted explicitly (`make accept_segment_poc`) before step 4.
 4. **Step 4** for the two entries, in three parts:
     - **Part 1, rules** (`make extract_poc`, then `make accept_extract_poc`): objects for the entry and each copy (identifiers, title, object name, material, dimensions, date, attribution, lost or destroyed, the relation to the entry), exhibitions and literature split into reference and locator, provenance in its fixed forms with the chain and the current location. The two entries have 58 provenance stages: rules handle 40, and 18 are left for the LLM.
     - **Part 2, provenance with a local LLM** for the stages that rules leave. The models are Qwen3.5 4B and Ministral 3 8B, compared on the same items in llama.cpp `llama-server` (see "Models").
@@ -111,7 +111,10 @@ Before the whole corpus, every step is run on two catalogue entries: one from XI
 
     Reference records are not made in the POC. Instead, the measurement uses what needs no ground truth: rejected LLM answers, agreement between the rules and the LLM on the stages both handle, agreement between the two models, and a check of the review pages.
 
-5. **Step 5**, minimal: normalisation, one LOD lookup and the RKD comparison if the export is available; the index PDFs are added to the manifest for the control lists.
+5. **Step 5**, parts 5a and 5b (see "POC findings (5a and 5b)"):
+    - **5a, control lists** (`make lists_poc`): the collections and names-and-places indexes of both parts as `control_terms` with their page references, and the RKDimages records of the 22 POC objects with the RKD terms they use, from the public RKD Knowledge Graph (SPARQL; only RKD IDs are sent).
+    - **5b, normalisation** (`make normalise_poc`, then `make review_normalise_poc` for the review file `data/poc/review/normalisation.csv`): holders, places, auction houses, consignors, buyers and sales of the two entries, matched to the RKD and index terms, clustered, and formatted by the RKD entry instructions where no term fits.
+    - **Deferred:** the literature and exhibition abbreviations (there is no RKD citation list yet), 5c (LOD URIs), 5d (named entities), 5e (the comparison with the RKD records, which are fetched and ready for it) and 5f.
 
 ## Step 1: text database
 
@@ -796,7 +799,13 @@ The rules run in this order, each on the result of the previous one:
     - `literature`, `lit.:`, `exhibited`, `exh.:`: at `;` outside brackets (one reference each);
     - in the abbreviations/bibliography and exhibitions sections: one item per abbreviation with its full citation, recognised by the hanging-indent layout and the abbreviation pattern (author, short title, year; or place, year).
       The separator and the item pattern are part of the volume configuration, because the conventions changed over time (the 2015 bibliography rules apply from V (1), 2014).
-10. **Index entries.** In the index documents and index sections: one `item` per index entry (heading term with its page references), with sub-entries as child items, recognised by indentation and the page-reference pattern (`123`, `123–125`, `n. 12`, `Fig. 58`, `No. 22`); entries continuing in the next column or on the next page stay one item. Step 5 parses them into terms with page references. Each index is segmented once: where a born-digital index excerpt exists (`excerpt_of`), the excerpt is used and the index pages of the main PDF are marked as a `section` labelled `index (see excerpt)` without items, so no index term is counted twice.
+10. **Index entries.** In the index documents and index sections: one `item` per index entry (heading term with its page references), with sub-entries as child items, recognised by indentation and the page-reference pattern (`123`, `123–125`, `n. 12`, `Fig. 58`, `No. 22`); entries continuing in the next column or on the next page stay one item. Step 5 parses them into terms with page references.
+
+    In the POC (`crlb/segmentation/index.py`), two layouts, chosen by the section name (`index: collections`, `index: names and places`; the other indexes stay `index`):
+    - **names and places:** the level of a line is its indentation from its column's edge, in steps of the volume's `[index] indent` (11.3 pt in XIX (4), 8.7 pt in the II index). The columns are split at the widest gap between line starts, not at the middle of the page. A line continues the item before it when it starts with a page reference or a bracket, when it lies inside a word that step 2 joined across the line break (`Arch-` / `duchess`), when it is indented and starts in lower case (`of the Netherlands`), when the line before ends in `,` or `-` or has an open bracket, or at the hanging indent (two steps; for a sub-entry the volume's `hanging`, one step in the II index).
+    - **collections:** a line in capitals is the collection, a line ending in `:` (with the line before it, if that has no catalogue number) the attribution (`Rubens, painting:`), and the lines after it are works up to their catalogue number (`No. 2, Copy;`, `Cat. 12c,`, OCR `a t . 17`).
+    - The introduction of an index, set across the page, is a `field` labelled `introduction`, in no item. Index titles are furniture (`index_title`), so the first page of an index belongs to its section.
+    - Results: XIX (4) 169 collections items and 1,000 names items, II 339 and 1,255. No line is outside an item; 7 items in XIX (4) are incomplete (no page reference), all genuinely without one (`Christie’s (Amsterdam)`). Each index is segmented once: where a born-digital index excerpt exists (`excerpt_of`), the excerpt is used and the index pages of the main PDF are marked as a `section` labelled `index (see excerpt)` without items, so no index term is counted twice.
 
 Patterns, label lists, style thresholds and furniture bands are kept in one configuration file per volume (`data_manifest/segmentation/<part>.toml`, in git, for example `XIX_4.toml` and `II_1.toml`), on top of `defaults.toml`; a file names its `part` and overrides any default key. TOML is used because the files are written by hand and are mostly regular expressions: TOML allows comments to explain each pattern and threshold, and single-quoted strings are literal, so a regular expression is written without doubled backslashes; Python reads it with the standard library (`tomllib`). The tables are `[[furniture]]` (bands as fractions of the page height, with size limits), `[sections]` (bookmarks or running heads, section names), `[heading]` (heading patterns, style, numbering prefixes), `[fields]` (labels per field, separators, date pattern, description and note rules, list fields) and `[copies]` (copy marker, sub-field labels). Configurations are developed on a few pages and then checked on the whole volume.
 
@@ -1427,7 +1436,7 @@ Control lists are the lists of accepted values that extracted values are normali
 Notes:
 
 - **The corpus indexes** are the most valuable list for this corpus: they are compiled by the authors, use the spellings of the text, and say on which (printed) pages each name occurs. They are segmented in step 3 (rule 10: index entries, sub-entries, page references) and parsed here into terms with page references.
-- **RKD data** comes either from an export of RKD/Axiell provided by the Rubenshuis or RKD, or from the RKD's public interfaces, whichever is available; to be agreed. It is stored locally with its source and date, so runs are reproducible.
+- **RKD data** comes either from an export of RKD/Axiell provided by the Rubenshuis or RKD, or from the RKD's public interfaces. In the POC it comes from the public RKD Knowledge Graph (CIDOC-CRM, SPARQL on TriplyDB; `data.rkd.nl` serves the same nodes one by one): per record, its own nodes level by level (provenance transfers and activities), then the names of the terms they point to, and for an auction its dates, place and actors. It is stored locally with its source and date, so runs are reproducible, and only RKD IDs are sent. The older `api.rkd.nl` no longer answers.
 - **Effort:** the offer reserves 3 person-days for creating the control lists ("Creëren controlelijsten").
 
 ```sql
@@ -1448,25 +1457,32 @@ CREATE TABLE control_terms (
 );
 CREATE INDEX control_terms_vocabulary_label ON control_terms(vocabulary, label);
 
--- Page references of corpus index terms.
+-- Page references of corpus index terms; in the collections index also the catalogue number.
 CREATE TABLE index_references (
+    id            INTEGER PRIMARY KEY,
     term_id       INTEGER NOT NULL REFERENCES control_terms(id),
+    segment_id    INTEGER NOT NULL REFERENCES segments(id),  -- the item the reference is printed in
     part          TEXT NOT NULL REFERENCES parts(part),
-    printed_page  TEXT NOT NULL,     -- as printed in the index; resolved to pages through printed_pages
-    note_number   TEXT,              -- 'n. 12' in the index
-    entry_number  TEXT               -- if the index refers to catalogue numbers instead of pages
+    printed_page  TEXT,              -- as printed; NULL for a work of the collections index without pages
+    note_number   TEXT,              -- '4' for '11 n. 4'
+    figure        TEXT,              -- '12' for 'fig. 12'
+    entry_number  TEXT,              -- collections index: the catalogue number ('4', '12c'), checked against the entries
+    entry_text    TEXT,              -- collections index: the number as printed ('No. 22, Copy 4', OCR 'Cat. nb')
+    copy_text     TEXT,              -- collections index: 'Copy', 'Copy 4'
+    attribution   TEXT               -- collections index: 'After Rubens, painting', 'José Risueno, paintings after Rubens'
 );
+CREATE INDEX index_references_term ON index_references(term_id);
 
--- The RKD records themselves (export or interface), as fetched.
+-- The RKDimages records of the CRLB works, as fetched: all triples of the record's own nodes.
 CREATE TABLE rkd_records (
     rkd_id        TEXT PRIMARY KEY,  -- RKDimages artwork number
-    data          TEXT NOT NULL,     -- the raw record as JSON (Adlib field names or interface format)
-    source        TEXT NOT NULL,     -- 'axiell export <date>', 'rkd interface', ...
+    data          TEXT NOT NULL,     -- JSON list of [subject, predicate, object, object type]
+    source        TEXT NOT NULL,     -- 'RKD Knowledge Graph (SPARQL)'
     retrieved_at  TEXT NOT NULL
 );
 ```
 
-`rkd_records` is used twice: to pre-fill the reference records of step 4, and for the comparison in 5e. It is filled once per export and replaced as a whole when a newer export arrives.
+`rkd_records` is used in 5b as evidence (the terms the record of the same work uses), for the comparison in 5e, and for the optional pre-filling of reference records (step 4). It is filled per record and replaced when a record is fetched again (`--refresh`).
 
 ### 5b: normalisation
 
@@ -1495,7 +1511,7 @@ For each value of step 4, the normalised value is the value as it would be enter
 | remarks on references and auctions in the standard wording                                                                           | `(as Jan van Eyck)` → `as by Jan van Eyck`; `listed as '…'`              |
 | comment fields in American English, telegram style                                                                                   | —                                                                        |
 
-The instructions are kept as a rules file in git (`src/crlb/enrichment/entry_rules/`), with the section of the RKD manual each rule implements, so the client can check them.
+The instructions are kept in one module in git (`src/crlb/enrichment/instructions.py`), with the section of the RKD manual each rule implements, so the client can check them. In the POC only the rules the values need are implemented: personal names as `Last, First` (particles and titles of nobility after the first names, `Vinck de Wesel, Jean François baron`; forms of address in brackets, `Rothmann, Fritz (dr.)`), life dates left out, and _Private collection_, _Art dealer_ and _Whereabouts unknown_ for unnamed owners (RKDimages (EN), Screen 6: Herkomst 1, Name of collection). Step 4 already writes inventory and lot numbers and prices in the RKD form.
 
 **Specific cases:**
 
@@ -1546,6 +1562,14 @@ CREATE TABLE normalised_values (
 );
 CREATE INDEX normalised_values_row ON normalised_values(table_name, row_id);
 ```
+
+### POC findings (5a and 5b)
+
+- **Control terms:** XIX (4) 1,032 index terms (330 persons, 161 collections, 65 places, 185 works, 33 dealers and auctioneers) and II 1,330; the collections indexes list 69 and 178 works, of which all 69 and 174 have a catalogue number of the part (the OCR's `Cat. nb` is read as `11b` only if that entry exists; `14b` is missing from the segmentation of II (1)). RKD: 22 records (2,707 triples) and 126 terms (28 collections, 21 actors, 3 auctions, 9 artists, 65 thesaurus terms).
+- **Matching** (`crlb/enrichment/matching.py`): the name similarity (rapidfuzz, on forms without case, accents, punctuation, life dates and leading article, also as `Last, First`) plus evidence: the index refers to the value's printed page (+0.1), the RKD record of the same work uses the term (+0.1), the collections index lists the object (its copy, or an `after Rubens` work) under the collection (+0.15, for the current location), the RKD auction's dates contain the sale's date (with +0.15 for the same place). A term is assigned from 0.95 with a margin of 0.1 to the next; from 0.8 without a decision the value goes to review. Candidates below 0.7 similarity are dropped.
+- **Normalised value:** the RKD term when one is assigned, else the index spelling of a person (`Verdussen, Cornelia`), else the entry instructions. Values sharing a term, directly or through another value, are one cluster, and a cluster with an RKD term gives its name to all its values (the buyer `Gasser` gets `Gasser, Hanns` through `Hans Gasser`).
+- **Results** on the two entries (113 values): of 51 holders, 21 get an RKD term, 24 an index term, 1 its RKD term through its cluster, 1 a formatted name, and 4 go to review (`Plantin-Moretus collection`, `French royal collection`, `A. Delahante` against `Delahante, Alexis`, `John Clerk, Lord Eldin` with two index entries). All 12 named current locations are confirmed by the collections index. 3 of the 14 sales match an RKD auction; the Fonson sale of 5 September 1821 is in both No. 4 (Oudenaarde) and its copy 3 (Ghent), and the second goes to review because the place differs. The RKD names correct OCR (`Mile Bowen` → `Bowen, Mlle`) and complete abbreviations (`Prado` → `Museo Nacional del Prado`). 89 clusters, 14 with more than one value.
+- **Not yet:** places are only checked against the index (no RKD geographic terms or TGN yet, 5c); the request list of missing RKD terms; merging the same sale across entries beyond the RKD auction file.
 
 ### 5c: enrichment with LOD URIs
 
@@ -1730,9 +1754,9 @@ Thresholds per part are set by the user beforehand, as in steps 2 and 4.
 
 Subpackage `crlb.enrichment`, schema `05_enrichment.sql`:
 
-- `crlb lists fetch`: fetches and caches the RKD lists and records (5a) and the LOD vocabulary subsets (5c) into `control_terms` and `rkd_records`; prints only counts.
+- `crlb lists rkd`: fetches and caches the RKD records of the sample's works and the RKD terms they use (5a) into `rkd_records` and `control_terms`; prints only counts. The LOD vocabulary subsets (5c) follow.
 - `crlb lists indexes`: turns the index segments of step 3 into `control_terms` and `index_references` (5a).
-- `crlb normalise`: matching to control lists, clusters and the entry-instruction rules (5b); `crlb/enrichment/entry_rules/` holds the entry instructions, each with a reference to the section of the RKD manual.
+- `crlb normalise run`: matching to control lists, clusters and the entry-instruction rules (5b); `crlb/enrichment/instructions.py` holds the entry instructions, each with a reference to the section of the RKD manual. `crlb normalise review`: the review file, one CSV row per value with the source text of its stage, the normalised value, the cluster, the three best candidates with their evidence, and an empty `ok` column.
 - `crlb normalise request-terms`: the list of missing terms in the RKD request format.
 - `crlb enrich`: LOD URIs for clusters and list values (5c).
 - `crlb ner`: gazetteer matching, compact model and LLM fallback on the descriptive texts, roles and `ro_subjects` (5d), using `crlb.llm`.
@@ -1740,7 +1764,7 @@ Subpackage `crlb.enrichment`, schema `05_enrichment.sql`:
 - `crlb export rkd-references` and `crlb add-links`: the CRLB reference per RKD record, and the PDF copies with embedded RKD links (5f).
 - `crlb enrich review`: a local review file with the value, its context in the PDF, the candidates and the URIs.
 
-New dependencies, to be confirmed when the code is written: a SPARQL or HTTP client for the external lists (rapidfuzz, for fuzzy matching, is already a dependency), and a compact NER model (GLiNER) if 5d needs it. Every model used is added to `README.md` under AI usage.
+New dependencies, to be confirmed when the code is written: none for 5a and 5b (the SPARQL queries use the standard library, rapidfuzz was already a dependency), and a compact NER model (GLiNER) if 5d needs it. Every model used is added to `README.md` under AI usage.
 
 ### Tests
 
@@ -1768,7 +1792,7 @@ New dependencies, to be confirmed when the code is written: a SPARQL or HTTP cli
 
 ### Points to check first
 
-- How RKD data can be obtained: an export from Axiell (by the Rubenshuis or RKD), or the RKD's public interfaces; and under which conditions.
+- How RKD data can be obtained: an export from Axiell (by the Rubenshuis or RKD), or the RKD's public interfaces; and under which conditions. The POC uses the public RKD Knowledge Graph; whether that is complete enough (validation lists as a whole, not only the terms the records use) is still to be checked.
 - Which authority the RO model uses per property where several are possible (persons: RKDartists or Wikidata; places: TGN or RKD's geographic terms).
 - Licences and terms of use of the external lists when cached and redistributed (Iconclass, Getty, RKD).
 - Whether new terms should be requested from the RKD thesaurus, or Rubens Online keeps its own list.

@@ -108,5 +108,22 @@ markdown_poc:
 	$(call header,Step 4: Markdown export of the entries)
 	$(call run,uv run --locked crlb extract markdown data/poc/crlb.sqlite --sample "$(POC_SAMPLE)")
 
+# Control lists: the corpus indexes of the active segmentation run, and the RKD
+# records of the two POC entries and their copies with the terms they use
+# (RKD Knowledge Graph, SPARQL; only RKD IDs are sent)
+lists_poc:
+	$(call header,Step 5a: control lists from the indexes and RKD)
+	$(call run,uv run --locked crlb lists indexes data/poc/crlb.sqlite)
+	$(call run,uv run --locked crlb lists rkd data/poc/crlb.sqlite --sample "$(POC_SAMPLE)")
+
+normalise_poc:
+	$(call header,Step 5b: normalisation of the provenance values)
+	$(call run,uv run --locked crlb normalise run data/poc/crlb.sqlite --sample "$(POC_SAMPLE)")
+
+# One CSV row per normalised value, with its source text and candidates, in data/poc/review/
+review_normalise_poc:
+	$(call header,Step 5b: review file of the latest normalisation run)
+	$(call run,uv run --locked crlb normalise review data/poc/crlb.sqlite)
+
 help:
-	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, substitute_poc, measure_poc, show_poc, poc, accept_poc, segment_poc, entries_poc, show_segment_poc, accept_segment_poc, extract_poc, accept_extract_poc, serve_qwen, serve_ministral, extract_llm_poc, review_extract_poc, markdown_poc"
+	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, substitute_poc, measure_poc, show_poc, poc, accept_poc, segment_poc, entries_poc, show_segment_poc, accept_segment_poc, extract_poc, accept_extract_poc, serve_qwen, serve_ministral, extract_llm_poc, review_extract_poc, markdown_poc, lists_poc, normalise_poc, review_normalise_poc"
