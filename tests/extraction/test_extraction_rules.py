@@ -160,6 +160,99 @@ def test_location_with_a_person_first() -> None:
     assert (place.place, place.holder) == ("Santiago de Compostela", "Cathedral")
 
 
+def test_description_before_a_location() -> None:
+    """Text that describes the work before the place is not part of the location."""
+    for text, place, holder in [
+        (
+            (
+                "A fictive copy depicted in the Interior with Figures before a Picture Collection,"
+                " by Gonzales Goques and others, The Hague, Mauritshuis"
+            ),
+            "The Hague",
+            "Mauritshuis",
+        ),
+        (
+            "his head covered with a hood, Copenhagen, Print Room",
+            "Copenhagen",
+            "Print Room",
+        ),
+        (
+            "Right half of a drawing, Brunswick, Herzog Anton Ulrich-Museum",
+            "Brunswick",
+            "Herzog Anton Ulrich-Museum",
+        ),
+        (
+            "a fragment showing the five figures, Dr. Berger, Pittem",
+            "Pittem",
+            "Dr. Berger",
+        ),
+    ]:
+        location = objects.parse_location(text)
+        assert (location.place, location.holder) == (place, holder), text
+
+
+def test_region_after_the_place() -> None:
+    """A region after the place belongs to the place; an institution there does not."""
+    region = objects.parse_location(
+        "Greenville, South Carolina, Bob Jones University Collection"
+    )
+    assert (region.place, region.holder) == (
+        "Greenville, South Carolina",
+        "Bob Jones University Collection",
+    )
+    munich = objects.parse_location(
+        "Munich, Bayerische Staatsgemäldesammlungen, Alte Pinakothek"
+    )
+    assert (munich.place, munich.holder) == (
+        "Munich",
+        "Bayerische Staatsgemäldesammlungen, Alte Pinakothek",
+    )
+    louvre = objects.parse_location(
+        "Paris, Musée du Louvre, Département des Arts Graphiques"
+    )
+    assert (louvre.place, louvre.holder) == (
+        "Paris",
+        "Musée du Louvre, Département des Arts Graphiques",
+    )
+
+
+def test_people_and_years_in_a_location() -> None:
+    """Titles and middle initials name a holder; a year in brackets after the place is the date."""
+    assert (
+        objects.parse_location("Mme Henri Heugel, Paris").holder == "Mme Henri Heugel"
+    )
+    assert (
+        objects.parse_location("Walter C. Koerner, Vancouver (Canada)").holder
+        == "Walter C. Koerner"
+    )
+    dated = objects.parse_location("Antwerp (1967), M. Weinstein")
+    assert (dated.place, dated.holder, dated.date_text) == (
+        "Antwerp",
+        "M. Weinstein",
+        "1967",
+    )
+
+
+def test_the_weaver_of_a_tapestry_copy_is_its_attribution() -> None:
+    """A maker before the location becomes the attribution, with its qualifier."""
+    copy = objects.parse_copy(
+        "(2) Frans van den Hecke, Turin, Museo Civico; 460 : 480 cm.;"
+    )
+    assert copy.attribution == objects.Attribution(
+        "Frans van den Hecke", "Frans van den Hecke", "huidig"
+    )
+    assert objects.maker_attribution("Frans van den Hecke (?)").status == "mogelijk van"
+    assert objects.maker_attribution(
+        "Probably Frans van den Hecke"
+    ) == objects.Attribution(
+        "Probably Frans van den Hecke", "Frans van den Hecke", "waarschijnlijk van"
+    )
+    assert (
+        objects.maker_attribution("Jodocus de Vos (after the engraving)").actor
+        == "Jodocus de Vos"
+    )
+
+
 def test_copy_support_after_a_comma_is_not_the_holder() -> None:
     """The OCR's ',' for ';' before the support does not put the support in the holder."""
     copy = objects.parse_copy(
@@ -373,3 +466,12 @@ def test_mapping_tables_use_list_values() -> None:
         assert set(vocabularies.mapping(table).values()) <= vocabularies.labels(
             values
         ), table
+
+
+def test_a_print_published_in_a_book_has_no_location() -> None:
+    """'published by … in <book>, Haarlem 1650' is a publication, not where the print is."""
+    copy = objects.parse_copy(
+        "(1) Engraving, by Jonas Suyderhoef, published by Pieter Soutman in Principes Hollandiae,"
+        " Zelandiae, et Frisiae, Haarlem 1650; 350 × 260 mm."
+    )
+    assert copy.location is None

@@ -53,13 +53,29 @@ UNCERTAIN_PREFIX = r"(?:(?i:probably|possibly)\s+)?"
 # A person at the start of a location: initials or a title ('R. Lauwers', 'Mrs. Smith')
 PERSON_STRONG = re.compile(
     UNCERTAIN_PREFIX
-    + r"(?:(?:[A-Z]\.\s?)+[A-Z][a-z]|(?:Mrs?|Dr|Sir|Lady|Count|Countess|Baron|baron|Prince)\.?\s+[A-Z])"
+    + r"(?:(?:[A-Z]\.\s?)+[A-Z][a-z]|[A-Z][a-z]+\s+(?:[A-Z]\.\s?)+[A-Z][a-z]|(?:Mrs?|Mme|Mlle|Madame|Monsieur|Dr|Sir|Lady|Lord|Duke|Earl|Marquis|Marquess|Count|Countess"
+    r"|Comte|Comtesse|Graf|Gräfin|Baron|baron|Prince|Princess|Frau|Herr|Mevrouw)\.?\s+[A-Z])"
 )
 # ... or a name with a particle ('Frans van den Hecke', 'Jodocus De Vos')
 PERSON_PARTICLE = re.compile(
     UNCERTAIN_PREFIX
     + r"[A-Z][\w-]+(?:\s+[A-Z][\w-]+)*(?:\s+(?:van|von|de|De|den|der|du|le|la|di|da))+\s+[A-Z]"
 )
+# Words that name an institution or a building, besides the collection types
+INSTITUTION = re.compile(
+    r"\b(?:palace|palazzo|palais|pal[aá]cio|paço|castle|ch[aâ]teau|schloss|house|hall|collection|collezione"
+    r"|sammlung|trust|academy|acad[eé]mie|institute?|society|college|school|chapel|hospital|h[oô]pital"
+    r"|cabinet|kabinett|archives?|library|cathedral|church|chiesa|kerk|abbey|convent)\b",
+    re.IGNORECASE,
+)
+# ... also inside a compound ('Staatsgemäldesammlungen', 'Ulrich-Museum')
+INSTITUTION_COMPOUND = re.compile(
+    r"sammlung|museum|galerie|kabinett|bibliothek|pinakothek", re.IGNORECASE
+)
+# A print published in a book has no location ('published by Pieter Soutman in …')
+PUBLISHED = re.compile(r"^published\b", re.IGNORECASE)
+# The status of a maker named before a location ('Probably Frans van den Hecke')
+MAKER_QUALIFIERS = {"probably": "waarschijnlijk van", "possibly": "mogelijk van"}
 # Numbered fields: the noun of their objects, and the relation to the entry
 NUMBERED = {
     "copies": ("Copy", "copy after"),
@@ -108,6 +124,9 @@ class Location:
     destruction_text: str | None = None
     destruction_cause: str | None = None
     date_text: str | None = None  # when the object was there ('2016')
+    maker: str | None = (
+        None  # a person named before the location: the weaver of a tapestry
+    )
 
 
 @dataclass
@@ -232,25 +251,36 @@ def parse_location(text: str) -> Location:
     if len(spans) > 1 and YEAR_PART.match(where[slice(*spans[-1])]):
         date_text = where[slice(*spans[-1])].strip()
         spans = spans[:-1]
+    # Before the location: a description ('A fictive copy depicted in …') or a
+    # maker ('Frans van den Hecke, Turin, Palazzo Reale'), in either order
+    maker = None
+    while len(spans) >= 3:
+        part = where[slice(*spans[0])].strip()
+        is_person = PERSON_STRONG.match(part) or PERSON_PARTICLE.match(part)
+        if maker is None and is_person and not names_institution(part):
+            maker = part
+            spans = spans[1:]
+        elif is_description(part):
+            spans = spans[1:]
+        else:
+            break
     first = where[slice(*spans[0])] if spans else ""
     is_type = vocabularies.longest_keyword(first, "collection_type_map") is not None
     if len(spans) == 2 and not is_type and PERSON_STRONG.match(first.strip()):
         # 'R. Lauwers, Mechelen': a person and a place, the person holds it
         holder, place = first.strip(), where[slice(*spans[1])].strip()
         return Location(holder, place, identifier or None, None, date_text=date_text)
-    if (
-        len(spans) >= 3
-        and not is_type
-        and (PERSON_STRONG.match(first.strip()) or PERSON_PARTICLE.match(first.strip()))
-    ):
-        # 'Frans van den Hecke, Turin, Palazzo Reale': the maker comes before the location
-        spans = spans[1:]
     parts = [where[a:b] for a, b in spans]
+    # 'Greenville, South Carolina, Bob Jones University': a region after the place
+    places = 2 if len(parts) >= 3 and is_region(parts[1]) else 1
     if len(parts) == 1:
         place, holder = None, parts[0]
     elif vocabularies.longest_keyword(parts[0], "collection_type_map") is None:
         # 'New York, The Metropolitan Museum of Art': the place comes first
-        place, holder = parts[0], span_text(where, spans[1:])
+        place, holder = (
+            span_text(where, spans[:places]),
+            span_text(where, spans[places:]),
+        )
     elif len(parts[-1].split()) <= 2 and not vocabularies.longest_keyword(
         parts[-1], "collection_type_map"
     ):
@@ -258,6 +288,10 @@ def parse_location(text: str) -> Location:
         place, holder = parts[-1], span_text(where, spans[:-1])
     else:
         place, holder = None, where
+    # 'Antwerp (1967), M. Weinstein': the year the object was there, after the place
+    year = re.match(r"^(.*\S)\s*\((\d{4})\)$", place or "")
+    if year:
+        place, date_text = year[1], date_text or year[2]
     return Location(
         holder or None,
         place,
@@ -267,7 +301,54 @@ def parse_location(text: str) -> Location:
         lost.group(0) if lost else None,
         cause(lost.group(0)) if lost else None,
         date_text,
+        maker,
     )
+
+
+def names_institution(part: str) -> bool:
+    """Return whether a part of a location names an institution, a building or a type of collection."""
+    return bool(INSTITUTION.search(part) or INSTITUTION_COMPOUND.search(part)) or (
+        vocabularies.longest_keyword(part, "collection_type_map") is not None
+    )
+
+
+def is_description(part: str) -> bool:
+    """Return whether a part before a location describes the work ('his head covered with a hood', 'Right half of a drawing')."""
+    text = part.strip()
+    return bool(text) and (
+        text[0].islower()
+        # 'A fictive copy …', 'The composition …': an article and a word in lower case
+        or bool(re.match(r"^(?:A|An|The)\s+[a-z]", text))
+        or (
+            len(text.split()) > 4
+            and not names_institution(text)
+            and not PERSON_STRONG.match(text)
+        )
+    )
+
+
+def is_region(part: str) -> bool:
+    """Return whether a part after the place is a region ('Kincardineshire', 'South Carolina'): one or two capitalised words, not an institution or a person."""
+    words = part.split()
+    return (
+        1 <= len(words) <= 2
+        and all(w[:1].isupper() for w in words)
+        and not names_institution(part)
+        and not PERSON_STRONG.match(part)
+    )
+
+
+def maker_attribution(maker: str) -> Attribution:
+    """Return the attribution of a maker named before a location, with its qualifier ('Probably …', '… (?)')."""
+    qualifier = maker.split()[0].lower()
+    status = MAKER_QUALIFIERS.get(qualifier)
+    actor = maker.split(maxsplit=1)[1] if status else maker
+    if re.search(r"\(\?\)|\?$", actor):
+        status = status or "mogelijk van"
+        actor = re.sub(r"\s*(?:\(\?\)|\?)$", "", actor)
+    # 'Jodocus de Vos (after the engraving)': a remark after the name stays in the text
+    actor = re.sub(r"\s*\([^()]*\)$", "", actor)
+    return Attribution(maker, actor.strip(), status or "huidig")
 
 
 def cause(text: str) -> str:
@@ -313,10 +394,17 @@ def parse_copy(text: str) -> CopyObject:
             or is_support(p)
         )
     ]
-    location = parse_location(span_text(described, where)) if where else None
+    published = any(PUBLISHED.match(p) for p, _ in rest)
+    location = (
+        parse_location(span_text(described, where)) if where and not published else None
+    )
+    attribution = parse_attribution(identity)
+    if attribution is None and location is not None and location.maker:
+        # The weaver of a tapestry copy: 'Tapestry, Frans van den Hecke, Turin, …'
+        attribution = maker_attribution(location.maker)
     return CopyObject(
         object_name_text,
-        parse_attribution(identity),
+        attribution,
         location,
         parse_material(physical)
         if physical

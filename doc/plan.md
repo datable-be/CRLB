@@ -1182,10 +1182,11 @@ Fixed after the demo (segmentation run 18, extraction runs 10–12, rules only, 
 
 Remaining:
 
-- descriptive text before a location (`A fictive copy depicted in …`, `Left half of a drawing, Brunswick, …`) and a region after the place (`Laurencekirk, Kincardineshire, Collection of …`);
-- the weaver of a tapestry copy is not recorded as an attribution;
+- a former location (`formerly Ghent, St. Peter’s Abbey`) is stored as the current one;
+- a person without initials, title or particle before a place (`Bertil Winberg, Helsingborg (Sweden)`) is taken as the place;
+- OCR damage that splits a name (`edited by Clem, de Jonghe, Amsterdam`).
 
-Also fixed after the demo (segmentation run 21): the footnotes of II (1), at the foot of the last page of an entry in 7.5–8.0 pt, are a notes field of their own (12 entries; `notes_max_size = 8.1`, and the notes may start at 2 or 3 where the OCR damaged the first numbers), and note markers are linked to their notes (rule 8). Run 22: the introductions to groups of entries (`Nos 21–38: …`) are segments of their own, so their text and notes no longer end up in the notes of the entry before them (XIX (4) Nos 13, 20 and 38).
+Also fixed after the demo (segmentation run 21): the footnotes of II (1), at the foot of the last page of an entry in 7.5–8.0 pt, are a notes field of their own (12 entries; `notes_max_size = 8.1`, and the notes may start at 2 or 3 where the OCR damaged the first numbers), and note markers are linked to their notes (rule 8). Run 22: the introductions to groups of entries (`Nos 21–38: …`) are segments of their own, so their text and notes no longer end up in the notes of the entry before them (XIX (4) Nos 13, 20 and 38). Extraction runs 22–24: before the location, a description of the work (`A fictive copy depicted in …`, `Right half of a drawing`, a part in lower case) and a maker are left out, in either order; the maker (the weaver of a tapestry copy, `Frans van den Hecke`, with `Probably` or `(?)` as status) becomes the copy's attribution; a region after the place belongs to the place (`Greenville, South Carolina`) unless it names an institution; titles (`Mme`, `Lord`, …) and middle initials (`Walter C. Koerner`) name a holder; a year in brackets after the place is the date (`Antwerp (1967)`); and a print published in a book (`published by … in …`) has no location. On all 164 entries: 19 current locations corrected, 42 weavers recorded as attributions, and 10 printed books no longer taken as locations; the POC entries are unchanged.
 
 ### POC findings (part 2, local LLM)
 
