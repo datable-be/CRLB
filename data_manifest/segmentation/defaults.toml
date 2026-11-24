@@ -11,6 +11,10 @@ link_tool_fonts = ["BellMT"]
 # Section names, matched case-insensitively against bookmark titles or running heads
 names.catalogue = 'catalog'
 names.abbreviations = 'abbreviations|bibliography'
+# The indexes whose entries are segmented (rule 10), before the other indexes;
+# the OCR may space a word ('COLLECTION S')
+names."index: collections" = '^index\b.*\bcollection\s?s\b|^collections$'
+names."index: names and places" = '^index\b.*\bnames and places\b|^names and places$'
 names.index = '^index'
 names.illustrations = 'illustrations'
 

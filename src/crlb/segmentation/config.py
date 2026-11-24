@@ -1,7 +1,8 @@
 """The per-volume segmentation configuration: one TOML file per CRLB part, on top of shared defaults.
 
 The files live in `data_manifest/segmentation/` (in git): `defaults.toml` and
-one file per part, which names its `part` and overrides any default key.
+one file per part, which names its `part` and overrides any default key. A
+file for a separate index document of a part also names `document = "index"`.
 """
 
 import hashlib
@@ -84,6 +85,12 @@ class Config:
     # the heading of an introduction to a group of entries ('Nos 21–38: Bust portraits')
     group_heading: re.Pattern[str] | None = None
     group_min_size: float = 0.0
+    # the document section the file is for: 'main' or 'index'
+    document: str = "main"
+    # one indentation step of the index sections, in points; None: no index entries
+    index_indent: float | None = None
+    # the hanging indent of a wrapped sub-entry, in indentation steps
+    index_hanging: int = 2
 
 
 def merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -106,6 +113,7 @@ def parse(raw: dict[str, Any], path: str, sha256: str) -> Config:
     fields = raw.get("fields", {})
     copies = raw.get("copies", {})
     groups = raw.get("groups", {})
+    index = raw.get("index", {})
     return Config(
         part=raw["part"],
         path=path,
@@ -148,11 +156,19 @@ def parse(raw: dict[str, Any], path: str, sha256: str) -> Config:
         ),
         group_heading=re.compile(groups["pattern"]) if "pattern" in groups else None,
         group_min_size=groups.get("min_size", 0.0),
+        document=raw.get("document", "main"),
+        index_indent=index.get("indent"),
+        index_hanging=index.get("hanging", 2),
     )
 
 
+def config_key(part: str, document: str) -> str:
+    """Return the key of a configuration: the part, followed by the document section unless it is 'main'."""
+    return part if document == "main" else f"{part}, {document}"
+
+
 def load_configs(directory: Path) -> dict[str, Config]:
-    """Load every volume configuration in a directory, keyed by part."""
+    """Load every volume configuration in a directory, keyed by part and document section (see config_key)."""
     defaults_bytes = (directory / DEFAULTS).read_bytes()
     defaults = tomllib.loads(defaults_bytes.decode("utf-8"))
     configs = {}
@@ -165,7 +181,8 @@ def load_configs(directory: Path) -> dict[str, Config]:
             path.as_posix(),
             hashlib.sha256(defaults_bytes + data).hexdigest(),
         )
-        if config.part in configs:
-            raise SystemExit(f"two configuration files for part {config.part}")
-        configs[config.part] = config
+        key = config_key(config.part, config.document)
+        if key in configs:
+            raise SystemExit(f"two configuration files for {key}")
+        configs[key] = config
     return configs

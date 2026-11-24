@@ -21,7 +21,9 @@ CREATE TABLE segments (
                                     -- 'item', 'paragraph', 'note'
     label          TEXT,            -- section name, entry number ('22', '10a', 'R3'),
                                     -- copy number ('(3)'), field name ('provenance', 'notes', ...),
-                                    -- note number ('19'), item position
+                                    -- note number ('19'), item position; in an index section
+                                    -- 'index entry', 'index attribution', 'index work' (items)
+                                    -- and 'introduction' (a field)
     first_word_id  INTEGER NOT NULL REFERENCES words(id),
     last_word_id   INTEGER NOT NULL REFERENCES words(id),
     rule           TEXT NOT NULL,   -- which rule created it

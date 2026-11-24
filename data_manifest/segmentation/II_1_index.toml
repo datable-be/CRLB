@@ -1,0 +1,42 @@
+# The index of part II (II (1)), a separate ABBYY OCR document: four indexes,
+# each with a title in 10 pt on its first page and running heads in capitals
+# 8.5 pt ("COLLECTIONS", "NAMES AND PLACES") on the others.
+part = "II (1)"
+document = "index"
+
+# The running heads and titles at the top, the page number at the bottom
+# (7.2-9.5 pt, as the OCR reads it; the text ends above 0.875). A title is not
+# a running head: its page takes the section of the next page, so the first
+# page of an index belongs to it.
+[[furniture]]
+label = "running_head"
+top = 0.0
+bottom = 0.15
+min_size = 8.3
+max_size = 9.0
+
+[[furniture]]
+label = "index_title"
+top = 0.0
+bottom = 0.15
+min_size = 9.5
+max_size = 10.5
+
+[[furniture]]
+label = "page_number"
+top = 0.875
+bottom = 1.0
+
+[sections]
+source = "running_heads"
+names.index = '^index|^subjects$|^other works by rubens$'
+
+[heading]
+# No catalogue entries in an index document
+pattern = '$^'
+
+[index]
+# Sub-entries and hanging indents step by about 8.7 pt; a wrapped sub-entry
+# continues one step further in
+indent = 8.7
+hanging = 1

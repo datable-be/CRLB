@@ -1,7 +1,7 @@
 """Run step 3: segment the documents into furniture, sections and entries, with the per-volume configuration.
 
 Covers the main documents whose part has a configuration in the configuration
-directory. Matching uses the corrected text of the active correction run; the
+directory, and the index documents with a configuration of their own. Matching uses the corrected text of the active correction run; the
 segments are ranges of raw word ids. The console shows only counts and the
 results of the checks.
 """
@@ -16,8 +16,8 @@ from pathlib import Path
 from crlb import db
 from crlb.runs import git_commit, utc_now
 from crlb.sample import SampleItem, add_sample_option, sample_parts
-from crlb.segmentation import checks, fields, markers, rules
-from crlb.segmentation.config import Config, load_configs
+from crlb.segmentation import checks, fields, index, markers, rules
+from crlb.segmentation.config import Config, config_key, load_configs
 from crlb.segmentation.model import Seg, load_document
 from crlb.text import CORRECTION_STEP, active_run
 
@@ -68,6 +68,17 @@ def segment_document(
     counts = {"furniture": len(furniture), "sections": len(sections)}
     furniture_starts = [s.first for s in furniture]
     for section in sections:
+        if section.label in index.LAYOUTS and config.index_indent is not None:
+            section.children = index.index_items(
+                doc,
+                section,
+                config.index_indent,
+                config.index_hanging,
+                index.LAYOUTS[section.label],
+                set(furniture_starts),
+            )
+            counts |= checks.index_checks(doc, section, set(furniture_starts))
+            continue
         if section.label != "catalogue":
             continue
         entries, dropped = rules.entries(doc, section, config, furniture_starts)
@@ -125,13 +136,13 @@ def segment(
     configs: dict[str, Config],
     sample: list[SampleItem] | None = None,
 ) -> int:
-    """Segment the configured main documents (of the sample, if given); return the id of the new run."""
+    """Segment the configured documents (of the sample's parts, if given); return the id of the new run."""
     correction_run = active_run(conn, CORRECTION_STEP)
     if correction_run is None:
         print("warning: no active correction run; matching on the raw text")
     options = {
         "configs": {
-            part: {"path": c.path, "sha256": c.sha256} for part, c in configs.items()
+            key: {"path": c.path, "sha256": c.sha256} for key, c in configs.items()
         },
         "sample": None
         if sample is None
@@ -144,14 +155,15 @@ def segment(
     assert run_id is not None
     parts = sample_parts(sample)
     documents = conn.execute(
-        "SELECT id, path, part FROM documents WHERE section = 'main' ORDER BY id"
+        "SELECT id, path, part, section FROM documents ORDER BY id"
     ).fetchall()
-    for document_id, path, part in documents:
-        if part not in configs or (parts is not None and part not in parts):
+    for document_id, path, part, section in documents:
+        key = config_key(part, section)
+        if key not in configs or (parts is not None and part not in parts):
             continue
         started = time.monotonic()
         counts = segment_document(
-            conn, run_id, document_id, configs[part], correction_run
+            conn, run_id, document_id, configs[key], correction_run
         )
         conn.commit()
         print(f"{path} ({time.monotonic() - started:.0f} s)")

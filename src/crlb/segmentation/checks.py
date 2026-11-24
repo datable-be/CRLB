@@ -122,3 +122,27 @@ def page_checks(printed: list[tuple[int, str | None, str]]) -> dict[str, int]:
         "unnumbered": sum(1 for _, n, _ in printed if n is None),
         "not increasing": decreasing,
     }
+
+
+def index_checks(doc: Document, section: Seg, skip: set[int]) -> dict[str, int]:
+    """Return the counts of the index item checks for one index section."""
+    items = [s for s in walk(section.children) if s.kind == "item"]
+    covered = [(s.first, s.last) for s in section.children]
+    outside = sum(
+        1
+        for line in doc.lines
+        if section.first <= line.first <= section.last
+        and line.first not in skip
+        and not any(a <= line.first <= b for a, b in covered)
+    )
+    name = section.label or "index"
+    return {
+        f"{name}: items": len(items),
+        f"{name}: top-level items": sum(
+            1 for s in section.children if s.kind == "item"
+        ),
+        f"{name}: lines outside an item or the introduction": outside,
+        f"{name}: incomplete items (no page reference or catalogue number)": sum(
+            1 for s in items if s.confidence != "certain"
+        ),
+    }
