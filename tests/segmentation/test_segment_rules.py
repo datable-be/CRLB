@@ -486,3 +486,38 @@ def test_notes_may_start_after_a_damaged_first_number() -> None:
     )
     assert [n.label for n in fields.notes(lines, loose)] == ["2", "3"]
     assert fields.notes(lines, BASE.fields) == []
+
+
+def test_group_introduction_ends_the_entry_before_it() -> None:
+    """A bold 'Nos 14–20:' heading starts a group introduction with its own text and notes, up to the next entry."""
+    b = PageBuilder()
+    b.page(
+        heading("No. 13. Seneca: Painting", 0.10),
+        body("The portrait of Seneca.", 0.20),
+        ("1. Rooses, 1890.", 0.30, 7.5, 0),
+        ("Nos 14–20: The second Moretus", 0.40, 12.7, 16),
+        ("commission", 0.43, 12.7, 16),
+        body("In 1630 Balthasar ordered.", 0.50),
+        ("1. Rooses, 1893.", 0.60, 7.5, 0),
+    )
+    b.page(heading("No. 14. Justus Lipsius: Painting", 0.10))
+    doc = b.document()
+    section = Seg("section", "catalogue", 1, b.next_id - 1, "test", "certain")
+    cfg = config(
+        group_heading=re.compile(r"^Nos\s+\d+\s*[–-]\s*\d+\s*[:.]"), group_min_size=12.0
+    )
+    entries, _ = rules.entries(doc, section, cfg)
+    groups = rules.groups(doc, section, entries, cfg)
+    lines = doc.pages[0]
+    assert [g.label for g in groups] == ["14–20"]
+    assert entries[0].last == lines[3].first - 1
+    assert groups[0].last == doc.pages[1][0].first - 1
+    found = fields.group_fields(groups[0], lines[3:], cfg)
+    assert [(f.label, len(f.children)) for f in found] == [
+        ("heading", 0),
+        ("description", 0),
+        ("notes", 1),
+    ]
+    assert found[0].last == lines[4].last
+    # Without the setting there are no groups
+    assert rules.groups(doc, section, entries, config()) == []

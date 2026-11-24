@@ -383,3 +383,58 @@ def entries(
             )
         )
     return result, dropped
+
+
+def is_group_heading(line: Line, config: Config) -> bool:
+    """Return whether a line is the heading of an introduction to a group of entries."""
+    first = line.words[0]
+    return (
+        config.group_heading is not None
+        and bool(config.group_heading.match(line.text))
+        and bool(first.flags & 16)
+        and first.size >= config.group_min_size
+    )
+
+
+def groups(
+    doc: Document,
+    section: Seg,
+    entry_segs: list[Seg],
+    config: Config,
+    skipped: Iterable[int] = (),
+) -> list[Seg]:
+    """Return the introductions to groups of entries in a section, and end the entry before each at its heading.
+
+    An introduction runs from its heading ('Nos 21–38: Bust portraits of Roman
+    emperors') to the next entry heading.
+    """
+    if config.group_heading is None:
+        return []
+    skip = set(skipped)
+    headings = [
+        line
+        for line in doc.lines
+        if section.first <= line.first <= section.last
+        and line.first not in skip
+        and is_group_heading(line, config)
+    ]
+    result = []
+    for line in headings:
+        before = [e for e in entry_segs if e.first < line.first <= e.last]
+        for entry in before:
+            entry.last = line.first - 1
+        following = [e.first for e in entry_segs if e.first > line.first]
+        last = min(following) - 1 if following else section.last
+        label = re.match(r"^Nos?\.?\s*([^:.]+)", line.text)
+        result.append(
+            Seg(
+                "group",
+                label[1].strip() if label else None,
+                line.first,
+                last,
+                "group heading",
+                "probable",
+                "bold heading 'Nos m–n'",
+            )
+        )
+    return result

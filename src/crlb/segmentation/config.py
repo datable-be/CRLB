@@ -81,6 +81,9 @@ class Config:
     number: re.Pattern[str]  # entry number, with groups 'prefix', 'digits', 'letter'
     prefixes: list[str]
     fields: Fields
+    # the heading of an introduction to a group of entries ('Nos 21–38: Bust portraits')
+    group_heading: re.Pattern[str] | None = None
+    group_min_size: float = 0.0
 
 
 def merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -102,6 +105,7 @@ def parse(raw: dict[str, Any], path: str, sha256: str) -> Config:
     damaged = heading.get("pattern_damaged_with_link")
     fields = raw.get("fields", {})
     copies = raw.get("copies", {})
+    groups = raw.get("groups", {})
     return Config(
         part=raw["part"],
         path=path,
@@ -142,6 +146,8 @@ def parse(raw: dict[str, Any], path: str, sha256: str) -> Config:
             copy_marker=re.compile(copies.get("marker", "$^")),
             copy_labels=copies.get("labels", {}),
         ),
+        group_heading=re.compile(groups["pattern"]) if "pattern" in groups else None,
+        group_min_size=groups.get("min_size", 0.0),
     )
 
 

@@ -70,20 +70,24 @@ def segment_document(
     for section in sections:
         if section.label != "catalogue":
             continue
-        section.children, dropped = rules.entries(
-            doc, section, config, furniture_starts
-        )
+        entries, dropped = rules.entries(doc, section, config, furniture_starts)
+        groups = rules.groups(doc, section, entries, config, furniture_starts)
         skip = set(furniture_starts)
-        for entry in section.children:
+        for seg in entries + groups:
             lines = [
                 line
                 for line in doc.lines
-                if entry.first <= line.first <= entry.last and line.first not in skip
+                if seg.first <= line.first <= seg.last and line.first not in skip
             ]
-            entry.children = fields.entry_fields(entry, lines, doc, config)
-        counts |= checks.entry_checks(
-            doc, section, section.children, dropped, furniture, config
-        )
+            seg.children = (
+                fields.entry_fields(seg, lines, doc, config)
+                if seg.kind == "entry"
+                else fields.group_fields(seg, lines, config)
+            )
+        section.children = sorted(entries + groups, key=lambda s: s.first)
+        counts |= checks.entry_checks(doc, section, entries, dropped, furniture, config)
+        if groups:
+            counts["group introductions"] = len(groups)
     counts |= checks.page_checks(printed)
     if correction_run is not None:
         joined = [

@@ -56,7 +56,7 @@ def find_markers(
 def insert_note_refs(
     conn: sqlite3.Connection, run_id: int, document_id: int, requires_style: bool
 ) -> tuple[int, int]:
-    """Store the note markers of every entry of a document in a run; return the markers and the notes."""
+    """Store the note markers of every entry and group introduction of a document in a run; return the markers and the notes."""
     markers = notes_total = 0
     furniture = conn.execute(
         "SELECT first_word_id, last_word_id FROM segments"
@@ -65,7 +65,7 @@ def insert_note_refs(
     ).fetchall()
     entries = conn.execute(
         "SELECT id, first_word_id, last_word_id FROM segments"
-        " WHERE run_id = ? AND document_id = ? AND kind = 'entry' ORDER BY first_word_id",
+        " WHERE run_id = ? AND document_id = ? AND kind IN ('entry', 'group') ORDER BY first_word_id",
         (run_id, document_id),
     ).fetchall()
     for entry_id, first, last in entries:

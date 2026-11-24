@@ -17,7 +17,7 @@ CREATE TABLE segments (
     run_id         INTEGER NOT NULL REFERENCES segmentation_runs(id),
     document_id    INTEGER NOT NULL REFERENCES documents(id),
     parent_id      INTEGER REFERENCES segments(id),
-    kind           TEXT NOT NULL,   -- 'furniture', 'section', 'entry', 'copy', 'field',
+    kind           TEXT NOT NULL,   -- 'furniture', 'section', 'entry', 'group', 'copy', 'field',
                                     -- 'item', 'paragraph', 'note'
     label          TEXT,            -- section name, entry number ('22', '10a', 'R3'),
                                     -- copy number ('(3)'), field name ('provenance', 'notes', ...),

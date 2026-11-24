@@ -413,6 +413,52 @@ def notes(lines: list[Line], fields: Fields) -> list[Seg]:
     return result
 
 
+def first_note(lines: list[Line], start: int, fields: Fields) -> int | None:
+    """Return the index of the line where the notes start: note size and a first note number."""
+    return next(
+        (
+            j
+            for j in range(start, len(lines))
+            if lines[j].size <= fields.notes_max_size
+            and (m := fields.note_number.match(lines[j].words[0].text))
+            and 1 <= int(m["number"]) <= fields.first_note_max
+        ),
+        None,
+    )
+
+
+def group_fields(group: Seg, lines: list[Line], config: Config) -> list[Seg]:
+    """Return the fields of an introduction to a group of entries: its heading, its text and its notes."""
+    if not lines:
+        return []
+    end = 1
+    while (
+        end < len(lines)
+        and lines[end].words[0].flags & 16
+        and lines[end].size >= config.group_min_size
+    ):
+        end += 1
+    notes_at = first_note(lines, end, config.fields)
+    parts = [
+        (0, "heading", "group heading lines"),
+        (end, "description", "after heading"),
+    ]
+    if notes_at is not None:
+        parts.append((notes_at, "notes", "note size and number"))
+    result = []
+    for k, (j, name, rule) in enumerate(parts):
+        stop = parts[k + 1][0] if k + 1 < len(parts) else len(lines)
+        field_lines = lines[j:stop]
+        if not field_lines:
+            continue
+        last = lines[stop].first - 1 if stop < len(lines) else group.last
+        seg = Seg("field", name, field_lines[0].first, last, rule, "probable")
+        if name == "notes":
+            seg.children = notes(field_lines, config.fields)
+        result.append(seg)
+    return result
+
+
 def entry_fields(
     entry: Seg, lines: list[Line], doc: Document, config: Config
 ) -> list[Seg]:
@@ -460,16 +506,7 @@ def entry_fields(
     notes_start = None
     if description is not None:
         starts.append((description, "description", "after labelled fields", None, 0))
-        notes_start = next(
-            (
-                j
-                for j in range(description + 1, len(lines))
-                if lines[j].size <= fields.notes_max_size
-                and (m := fields.note_number.match(lines[j].words[0].text))
-                and 1 <= int(m["number"]) <= fields.first_note_max
-            ),
-            None,
-        )
+        notes_start = first_note(lines, description + 1, fields)
         if notes_start is not None:
             starts.append((notes_start, "notes", "note size and number", None, 0))
     starts.sort()

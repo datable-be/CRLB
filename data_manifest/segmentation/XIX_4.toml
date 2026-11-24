@@ -40,3 +40,9 @@ max_size = 11.8
 # after a field that ends with a full stop
 heading_bold_lines = true
 description_new_block = true
+
+[groups]
+# Introductions to a group of entries: "Nos 21–38: Bust portraits of Roman
+# emperors" in bold 12.7 pt, with their own text and notes, up to the next entry
+pattern = '^Nos\s+\d+\s*[–-]\s*\d+\s*[:.]'
+min_size = 12.0
