@@ -6,7 +6,8 @@ The effective text is the tokens of the active correction run (step 2):
   words inside the range;
 - with the words inside page furniture of the active segmentation run (step 3)
   left out, so that the text of an entry or field that runs over a page break
-  does not contain the running head and page number.
+  does not contain the running head and page number; a range that lies inside
+  furniture (a heading stored out of reading order) keeps its words.
 
 Applying corrections from reviews is added here when that exists. Every token
 keeps the ids of its raw words, so each result traces back to coordinates.
@@ -63,12 +64,21 @@ def furniture_ranges(
     last_word_id: int,
     segmentation_run: int,
 ) -> list[tuple[int, int]]:
-    """Return the word ranges of the furniture segments of a run that overlap a range."""
-    return conn.execute(
-        "SELECT first_word_id, last_word_id FROM segments WHERE run_id = ? AND kind = 'furniture'"
-        " AND last_word_id >= ? AND first_word_id <= ?",
-        (segmentation_run, first_word_id, last_word_id),
-    ).fetchall()
+    """Return the word ranges of the furniture segments of a run to leave out of a range.
+
+    These are the furniture segments that overlap the range, except one that
+    contains the whole range: a range inside furniture (a heading stored out of
+    reading order) keeps its own words.
+    """
+    return [
+        (a, b)
+        for a, b in conn.execute(
+            "SELECT first_word_id, last_word_id FROM segments WHERE run_id = ? AND kind = 'furniture'"
+            " AND last_word_id >= ? AND first_word_id <= ?",
+            (segmentation_run, first_word_id, last_word_id),
+        )
+        if not (a <= first_word_id and last_word_id <= b)
+    ]
 
 
 def tokens(

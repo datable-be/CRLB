@@ -118,3 +118,15 @@ def test_entry_text_leaves_out_furniture(segmented: Path) -> None:
     ]
     text = [t.text for t in segment_text(conn, first, last, None, 1)]
     assert "10" in raw and "10" not in text and "continued" in text
+
+
+def test_a_range_inside_furniture_keeps_its_words(segmented: Path) -> None:
+    """Furniture is left out of a range around it, but a range lying inside furniture is read (a moved heading)."""
+    conn = db.connect(segmented)
+    first, last = conn.execute(
+        "SELECT first_word_id, last_word_id FROM segments WHERE kind = 'furniture'"
+        " AND first_word_id = last_word_id LIMIT 1"
+    ).fetchone()
+    inside = [t.text for t in segment_text(conn, first, last, None, 1)]
+    raw = conn.execute("SELECT text FROM words WHERE id = ?", (first,)).fetchone()[0]
+    assert inside == [raw]

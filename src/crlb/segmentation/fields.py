@@ -517,6 +517,9 @@ def entry_fields(
         if not field_lines:
             continue
         last = lines[end_line].first - 1 if end_line < len(lines) else entry.last
+        if last < field_lines[0].first:
+            # a heading stored out of reading order ends at its own last word
+            last = field_lines[-1].last
         seg = Seg("field", name, field_lines[0].first, last, rule, "probable", reason)
         words = [w for line in field_lines for w in line.words]
         if name in fields.numbered_fields:

@@ -149,6 +149,8 @@ class Seg:
     reason: str | None = None
     link_id: int | None = None
     children: list[Seg] = field(default_factory=list)
+    # an entry heading stored out of reading order, outside the entry's word range
+    heading: Line | None = None
 
 
 def same_line(a: Word, b: Word) -> bool:

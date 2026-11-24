@@ -309,6 +309,22 @@ def heading_candidate(
     )
 
 
+def moved_heading(line: Line, doc: Document, skip: set[int]) -> int | None:
+    """Return the first word of the page if a heading is stored out of reading order, else None.
+
+    ABBYY sometimes stores the heading at the top of a page as the page's last
+    block, after the text below it. The entry then starts at the page's first
+    stored line, and the heading is read from where it is stored.
+    """
+    page = [other for other in doc.pages[line.page_index] if other.first not in skip]
+    before = [other for other in page if other.first < line.first]
+    if before and all(
+        other.top >= line.bottom - 0.002 for other in page if other is not line
+    ):
+        return page[0].first
+    return None
+
+
 def entries(
     doc: Document, section: Seg, config: Config, skipped: Iterable[int] = ()
 ) -> tuple[list[Seg], list[str]]:
@@ -317,7 +333,9 @@ def entries(
     Headings with a readable number are kept if their numbers increase (a
     longest increasing subsequence); a heading whose number is damaged is kept
     if exactly one number fits between its neighbours. `skipped` holds the
-    first word ids of furniture lines, which are never headings.
+    first word ids of furniture lines, which are never headings. A heading
+    stored out of reading order (see moved_heading) starts its entry at the
+    first line of its page and is kept in the entry's `heading`.
     """
     skip = set(skipped)
     lines = [
@@ -325,11 +343,16 @@ def entries(
         for line in doc.lines
         if section.first <= line.first <= section.last and line.first not in skip
     ]
-    candidates = [
+    found_lines = [
         (line, found)
         for line in lines
         if (found := heading_candidate(line, doc, config))
     ]
+    starts = {
+        line.first: moved_heading(line, doc, skip) or line.first
+        for line, _ in found_lines
+    }
+    candidates = sorted(found_lines, key=lambda c: starts[c[0].first])
     keys = {
         i: key
         for i, (_, found) in enumerate(candidates)
@@ -369,17 +392,26 @@ def entries(
                 dropped.append(number or "?")
     result = []
     for k, (line, _key, number, confidence, link_id, evidence) in enumerate(accepted):
-        last = accepted[k + 1][0].first - 1 if k + 1 < len(accepted) else section.last
+        start = starts[line.first]
+        last = (
+            starts[accepted[k + 1][0].first] - 1
+            if k + 1 < len(accepted)
+            else section.last
+        )
+        moved = start != line.first
+        if moved:
+            evidence = [*evidence, "heading stored at the end of its page"]
         result.append(
             Seg(
                 "entry",
                 number,
-                line.first,
+                start,
                 last,
                 "heading",
                 confidence,
                 "; ".join(evidence),
                 link_id,
+                heading=line if moved else None,
             )
         )
     return result, dropped

@@ -160,6 +160,25 @@ def test_entries_by_heading_pattern_and_style() -> None:
     assert found[0].last == doc.pages[1][0].first - 1
 
 
+def test_heading_stored_at_the_end_of_its_page_starts_the_entry_at_the_page() -> None:
+    """A heading at the top of a page but stored after the text below it: the entry starts at the page's first line."""
+    b = PageBuilder()
+    b.page(heading("No. 1. Augustus: Painting"), body("text of No. 1", 0.5))
+    b.page(
+        body("Oil on panel of No. 2", 0.3),
+        body("provenance: x", 0.5),
+        heading("No. 2. Nero: Painting", 0.1),  # stored last, printed first
+    )
+    doc = b.document()
+    section = Seg("section", "catalogue", 1, b.next_id - 1, "test", "certain")
+    found, dropped = rules.entries(doc, section, config())
+    assert [e.label for e in found] == ["1", "2"] and dropped == []
+    assert found[0].last == doc.pages[1][0].first - 1
+    assert found[1].first == doc.pages[1][0].first
+    assert found[1].heading is doc.pages[1][2]
+    assert found[0].heading is None
+
+
 def test_out_of_sequence_number_is_dropped() -> None:
     """A number that breaks the increasing sequence is dropped, not made an entry."""
     b = PageBuilder()

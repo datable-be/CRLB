@@ -82,6 +82,20 @@ def segment_document(
         if section.label != "catalogue":
             continue
         entries, dropped = rules.entries(doc, section, config, furniture_starts)
+        for entry in entries:
+            if entry.heading is not None:
+                furniture.append(
+                    Seg(
+                        "furniture",
+                        "moved_heading",
+                        entry.heading.first,
+                        entry.heading.last,
+                        "reading order",
+                        "certain",
+                        f"the heading of entry {entry.label}, stored at the end of its page",
+                    )
+                )
+                furniture_starts.append(entry.heading.first)
         groups = rules.groups(doc, section, entries, config, furniture_starts)
         skip = set(furniture_starts)
         for seg in entries + groups:
@@ -90,6 +104,8 @@ def segment_document(
                 for line in doc.lines
                 if seg.first <= line.first <= seg.last and line.first not in skip
             ]
+            if seg.heading is not None:
+                lines = [seg.heading, *lines]
             seg.children = (
                 fields.entry_fields(seg, lines, doc, config)
                 if seg.kind == "entry"
