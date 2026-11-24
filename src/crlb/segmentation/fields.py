@@ -27,6 +27,9 @@ OPENING = "([“‘«"
 CLOSING = ")]”’»"
 SEE = re.compile(r"^\W*see\b", re.IGNORECASE)
 OCR_ONE = {"i", "l", "I"}
+# A copy marker the OCR damaged beyond the marker pattern: "(ix)" for "(11)"
+DAMAGED_MARKER = re.compile(r"^\([0-9ilIxX|!oO]{1,3}\)[,;:.]?$")
+MAX_MATERIAL_LINES = 5
 
 
 def label_length(
@@ -131,6 +134,49 @@ def heading_end(lines: list[Line], config: Config) -> int:
     return end
 
 
+def ends_mark_sentence(line: Line) -> bool:
+    """Return whether a line ends with a full stop after a word ('Vervoert.', 'GEVBELS.'), not after an initial or alone ('RAES F.', 'IAN .')."""
+    words = line.text.rstrip(CLOSING + " ").split()
+    if not words:
+        return False
+    core = re.sub(r"\W", "", words[-1])
+    # The OCR may read the full stop after the weaver's name as a comma ('GEVBELS,')
+    return (words[-1].endswith(".") and len(core) > 1) or (
+        words[-1].endswith(",") and len(core) > 2 and core.isupper()
+    )
+
+
+def continues_marks(previous: Line, line: Line) -> bool:
+    """Return whether a line continues the tapestry marks of the previous one.
+
+    It does when the previous line does not end a sentence, or when the line
+    starts with a name in capitals ('RAES F.', 'GEVBELS') or in lower case
+    ('of Jacob Fobert'); a line starting with a capitalised word ('Madrid,
+    Convent ...') after a sentence end starts the location.
+    """
+    first = re.sub(r"\W", "", line.words[0].text)
+    return (
+        not ends_mark_sentence(previous)
+        or (len(first) > 1 and first.isupper())
+        or first[:1].islower()
+    )
+
+
+def material_groups(lines: list[Line], fields: Fields) -> list[list[Line]]:
+    """Return the groups of lines before the labels, with a material that runs on (tapestry marks) kept whole."""
+    grouped = groups(lines)
+    if not grouped or fields.material_continues is None:
+        return grouped
+    if not fields.material_continues.search(" ".join(l.text for l in grouped[0])):
+        return grouped
+    n = 1
+    while n < min(len(lines), MAX_MATERIAL_LINES) and continues_marks(
+        lines[n - 1], lines[n]
+    ):
+        n += 1
+    return [lines[:n], *groups(lines[n:])]
+
+
 def before_labels(
     lines: list[Line], fields: Fields, start: int, stop: int
 ) -> tuple[list[tuple[str, list[Line]]], int]:
@@ -142,7 +188,7 @@ def before_labels(
     """
     result = []
     end = start
-    for k, group in enumerate(groups(lines[start:stop])):
+    for k, group in enumerate(material_groups(lines[start:stop], fields)):
         if k == 0:
             name = "material"
         elif group[0].italic:
@@ -232,7 +278,34 @@ def copy_starts(
         if found and int(found[0]) in (expected, expected + 1):
             result.append((i, found[0]))
             expected = int(found[0]) + 1
+        elif (
+            found is None
+            and DAMAGED_MARKER.match(word.text)
+            and next_marker(words, i + 1, line_starts, pattern, expected + 1)
+        ):
+            result.append((i, str(expected)))
+            expected += 1
     return result
+
+
+def next_marker(
+    words: list[Word],
+    start: int,
+    line_starts: set[int],
+    pattern: re.Pattern[str],
+    number: int,
+) -> bool:
+    """Return whether the marker of a copy number comes later, at a start of a line or after punctuation."""
+    for i in range(start, len(words)):
+        previous = words[i - 1].text.rstrip(CLOSING)
+        if not (
+            words[i].id in line_starts or (previous and not previous[-1].isalnum())
+        ):
+            continue
+        found = copy_marker(words, i, pattern)
+        if found and int(found[0]) == number:
+            return True
+    return False
 
 
 def copy_parts(words: list[Word], config: Config) -> list[Seg]:
@@ -240,10 +313,17 @@ def copy_parts(words: list[Word], config: Config) -> list[Seg]:
     fields = config.fields
     starts = [(0, "object")]
     for i, word in enumerate(words[1:], 1):
-        token = word.text.casefold().rstrip(":")
+        text = word.text.casefold()
+        token = text.rstrip(":")
         for name, aliases in fields.copy_labels.items():
-            if token in (alias.casefold() for alias in aliases):
+            # An alias with a colon only counts with it ('print:', not 'print' in the text)
+            if any(
+                text == a.casefold() if a.endswith(":") else token == a.casefold()
+                for a in aliases
+            ):
                 starts.append((i, name))
+        if starts[-1][1] == "print":
+            break  # a print after the copy keeps its own 'lit.:' inside it
     result = []
     for k, (i, name) in enumerate(starts):
         end = starts[k + 1][0] if k + 1 < len(starts) else len(words)

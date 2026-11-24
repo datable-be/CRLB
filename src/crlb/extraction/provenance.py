@@ -339,7 +339,10 @@ def insert_row(
             collection_place_label=location.place,
             collection_identifier=location.identifier,
             collection_entry_method=stage.entry_method if stage else None,
-            collection_entry_note="; ".join(stage.notes) if stage else None,
+            collection_entry_note="; ".join(
+                [*(stage.notes if stage else []), *filter(None, [location.date_text])]
+            )
+            or None,
             collection_is_current=1,
         )
         return

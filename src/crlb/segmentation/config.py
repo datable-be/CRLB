@@ -47,6 +47,8 @@ class Fields:
     ]  # fields that list works as "(1) ..., (2) ...": copies, prints, drawings
     copy_marker: re.Pattern[str]
     copy_labels: dict[str, list[str]]
+    # a material matching this runs on until a line ends a sentence (tapestry marks)
+    material_continues: re.Pattern[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -124,6 +126,9 @@ def parse(raw: dict[str, Any], path: str, sha256: str) -> Config:
             heading_bold_lines=fields.get("heading_bold_lines", False),
             description_new_block=fields.get("description_new_block", False),
             description_min_size=fields.get("description_min_size"),
+            material_continues=re.compile(fields["material_continues"])
+            if "material_continues" in fields
+            else None,
             notes_max_size=fields.get("notes_max_size", 0.0),
             note_number=re.compile(fields.get("note_number", "$^")),
             item_fields=fields.get("item_fields", []),

@@ -357,3 +357,116 @@ def test_boundary_inside_a_joined_token_is_a_conflict() -> None:
         Seg("field", "d", 10, 12, "test", "probable"),  # covers it exactly
     ]
     assert boundary_conflicts(segs, joined) == 2
+
+
+def tapestry_lines() -> list[Line]:
+    """Return the first lines of a tapestry entry in the style of II (1), the marks over two lines with a gap."""
+    b = PageBuilder()
+    b.page(
+        heading("3. ANGELS PLAYING MUSIC: TAPESTRY", 0.10),
+        (
+            "Wool and silk; 495 : 315 cm.; below, the mark of Brussels and IAN .",
+            0.15,
+            7.5,
+            2,
+        ),
+        (
+            "RAES F.; to the right, the marks of Jacob Fobert and Hans Vervoert.",
+            0.18,
+            7.5,
+            2,
+        ),
+        ("Madrid, Convent of the Descalzas Reales.", 0.21, 7.5, 2),
+    )
+    return b.pages[0]
+
+
+def test_tapestry_marks_stay_in_the_material() -> None:
+    """With material_continues set, the marks run on until a sentence ends; the location follows."""
+    lines = tapestry_lines()
+    marks = dataclasses.replace(
+        BASE.fields, material_continues=re.compile(r"\bma\w{1,3}:? of Brussels\b")
+    )
+    found, _ = fields.before_labels(lines, marks, 1, len(lines))
+    assert [(name, len(group)) for name, group in found] == [
+        ("material", 2),
+        ("location", 1),
+    ]
+    # Without the setting, the second line of the marks is taken as the location
+    found, _ = fields.before_labels(lines, BASE.fields, 1, len(lines))
+    assert [(name, len(group)) for name, group in found] == [
+        ("material", 1),
+        ("location", 1),
+        ("location", 1),
+    ]
+
+
+def test_marks_continue_until_the_location() -> None:
+    """'IAN .' continues; after 'GEVBELS.' or 'Vervoert.' a capitalised line starts the location."""
+    lines = tapestry_lines()
+    assert not fields.ends_mark_sentence(lines[1])
+    assert fields.continues_marks(lines[1], lines[2])
+    assert not fields.continues_marks(lines[2], lines[3])
+    b = PageBuilder()
+    b.page(
+        body("Wool and silk; below, the mark of Brussels and IA Q", 0.15),
+        body("GEVBELS.", 0.18),
+        body("Madrid, Convent of the Descalzas Reales.", 0.21),
+    )
+    first, weaver, madrid = b.pages[0]
+    assert fields.continues_marks(first, weaver)
+    assert not fields.continues_marks(weaver, madrid)
+
+
+def test_damaged_copy_marker_between_two_good_ones() -> None:
+    """'(ix)' is the next copy when the copy after it follows; without a following marker it is not a copy."""
+    ws = words(
+        "(1) Painting, Granada; lit.: Martin, 1972; (ix) Drawing, Hermitage; (3) Drawing"
+    )
+    starts = fields.copy_starts(ws, set(), BASE.fields.copy_marker)
+    assert [number for _, number in starts] == ["1", "2", "3"]
+    ws = words("(1) Painting, Granada; lit.: Martin, 1972; (ix) Drawing, Hermitage")
+    starts = fields.copy_starts(ws, set(), BASE.fields.copy_marker)
+    assert [number for _, number in starts] == ["1"]
+
+
+def test_a_print_keeps_its_own_literature() -> None:
+    """After 'print:' the rest of the copy is the print's, its 'lit.:' included; 'print' without a colon is text."""
+    with_print = dataclasses.replace(
+        BASE.fields,
+        copy_labels={**BASE.fields.copy_labels, "print": ["print:"]},
+    )
+    ws = words(
+        "(3) Painting, lost; lit.: Smith, 1829. print: Etching, by Vorsterman, a print after it; lit.: V.S., p. 223."
+    )
+    parts = fields.copy_parts(ws, dataclasses.replace(BASE, fields=with_print))
+    assert [p.label for p in parts] == ["object", "literature", "print"]
+
+
+def test_another_version_is_a_copies_label() -> None:
+    """The letter-spaced OCR form of 'Another version:' is found with spaces ignored."""
+    separator = re.compile(r":|;|'\.")
+    assert (
+        fields.label_length(
+            [
+                "A",
+                "n",
+                "o",
+                "t",
+                "h",
+                "e",
+                "r",
+                "v",
+                "e",
+                "r",
+                "s",
+                "io",
+                "n",
+                ":",
+                "Frans",
+            ],
+            ["copies", "another version"],
+            separator,
+        )
+        == 14
+    )

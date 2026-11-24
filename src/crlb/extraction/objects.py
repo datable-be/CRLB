@@ -47,6 +47,19 @@ COPY_DETAIL = re.compile(
     r"|possibly identical|inscribed|the composition|enlarged|cut)\b",
     re.IGNORECASE,
 )
+# A location part that is only a year: when the object was there ('R. Lauwers, Mechelen, 2016')
+YEAR_PART = re.compile(r"^\s*(?:in\s+)?\d{4}\s*$")
+UNCERTAIN_PREFIX = r"(?:(?i:probably|possibly)\s+)?"
+# A person at the start of a location: initials or a title ('R. Lauwers', 'Mrs. Smith')
+PERSON_STRONG = re.compile(
+    UNCERTAIN_PREFIX
+    + r"(?:(?:[A-Z]\.\s?)+[A-Z][a-z]|(?:Mrs?|Dr|Sir|Lady|Count|Countess|Baron|baron|Prince)\.?\s+[A-Z])"
+)
+# ... or a name with a particle ('Frans van den Hecke', 'Jodocus De Vos')
+PERSON_PARTICLE = re.compile(
+    UNCERTAIN_PREFIX
+    + r"[A-Z][\w-]+(?:\s+[A-Z][\w-]+)*(?:\s+(?:van|von|de|De|den|der|du|le|la|di|da))+\s+[A-Z]"
+)
 # Numbered fields: the noun of their objects, and the relation to the entry
 NUMBERED = {
     "copies": ("Copy", "copy after"),
@@ -94,6 +107,7 @@ class Location:
     collection_type: str | None
     destruction_text: str | None = None
     destruction_cause: str | None = None
+    date_text: str | None = None  # when the object was there ('2016')
 
 
 @dataclass
@@ -213,7 +227,24 @@ def parse_location(text: str) -> Location:
         )
     found = INVENTORY.split(text, maxsplit=1)
     where, identifier = found[0], (found[1].strip(" .") if len(found) > 1 else None)
-    spans = split_spans(where, ",")
+    spans = [s for s in split_spans(where, ",") if s[1] > s[0]]
+    date_text = None
+    if len(spans) > 1 and YEAR_PART.match(where[slice(*spans[-1])]):
+        date_text = where[slice(*spans[-1])].strip()
+        spans = spans[:-1]
+    first = where[slice(*spans[0])] if spans else ""
+    is_type = vocabularies.longest_keyword(first, "collection_type_map") is not None
+    if len(spans) == 2 and not is_type and PERSON_STRONG.match(first.strip()):
+        # 'R. Lauwers, Mechelen': a person and a place, the person holds it
+        holder, place = first.strip(), where[slice(*spans[1])].strip()
+        return Location(holder, place, identifier or None, None, date_text=date_text)
+    if (
+        len(spans) >= 3
+        and not is_type
+        and (PERSON_STRONG.match(first.strip()) or PERSON_PARTICLE.match(first.strip()))
+    ):
+        # 'Frans van den Hecke, Turin, Palazzo Reale': the maker comes before the location
+        spans = spans[1:]
     parts = [where[a:b] for a, b in spans]
     if len(parts) == 1:
         place, holder = None, parts[0]
@@ -235,6 +266,7 @@ def parse_location(text: str) -> Location:
         # 'Formerly Brussels, Palace; destroyed by fire 1731'
         lost.group(0) if lost else None,
         cause(lost.group(0)) if lost else None,
+        date_text,
     )
 
 
@@ -278,6 +310,7 @@ def parse_copy(text: str) -> CopyObject:
             or DIMENSIONS.search(p)
             or p.startswith("(")
             or p.lower().startswith("see ")
+            or is_support(p)
         )
     ]
     location = parse_location(span_text(described, where)) if where else None
@@ -290,6 +323,15 @@ def parse_copy(text: str) -> CopyObject:
         else Material(None, None, parse_dimensions(body)),
         uncertain,
         details,
+    )
+
+
+def is_support(part: str) -> bool:
+    """Return whether a part of a copy description starts with a support ('canvas, 300 : 431 cm.' after a ',' for ';')."""
+    text = part.strip().lower()
+    return any(
+        text == term or text.startswith(term + " ")
+        for term in vocabularies.mapping("support_map")
     )
 
 

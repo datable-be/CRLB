@@ -27,7 +27,7 @@ prefixes = ["", "R"]
 # alone does not count, as a line may start with "drawing." in running text
 labels.provenance = ["provenance"]
 labels.exhibited = ["exhibited"]
-labels.copies = ["copies", "copy", "other versions", "other version"]
+labels.copies = ["copies", "copy", "other versions", "other version", "another version"]
 labels.literature = ["literature"]
 labels.drawings = ["drawings", "drawing"]
 labels.prints = ["prints", "engravings", "engraving"]
@@ -49,3 +49,6 @@ marker = '^\((?P<number>\d+|[ilI])\)[,;:.]?$'
 labels.provenance = ["prov."]
 labels.literature = ["lit."]
 labels.exhibited = ["exh."]
+# A print after a copy ("print: Etching ... lit.: ..."): everything after it is
+# the print's, including its own "lit.:"; the colon is required
+labels.print = ["print:"]

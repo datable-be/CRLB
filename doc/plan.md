@@ -1167,9 +1167,22 @@ Every verbatim value occurs in its source. On all 164 entries of both volumes, t
 
 Known gaps:
 
-- **Errors carried over from step 3**: in No. 4, the print of copy (3) is read as part of its literature. In No. 12c, copy (11) is read into the literature of copy (10). In II (1), the tapestry marks spill into the location field.
 - **Entry attribution** (decided): an entry gets no attribution row. Its attribution to Rubens goes without saying in the catalogue. Only attributions stated in the text, such as those of copies, are recorded.
-- **Order in locations**: a location such as `R. Lauwers, Mechelen, 2016` gets the order of place and holder wrong. The rules assume the place comes first, unless the first part names a type of collection.
+
+Fixed after the demo (segmentation run 18, extraction runs 10–12, rules only, on the 2b text), each with a test. The POC entries now have 22 objects (copy (11) of No. 12c added) and 86 literature references (the 6 wrong ones from the print of No. 4 removed); 19 provenance stages are left for the LLM, as the stray `and` row of the earlier runs now goes there.
+
+- **Tapestry marks** (II (1), 14 entries): the marks run over several lines that the OCR separates by a gap, so they were read as the location. A per-volume setting (`fields.material_continues` in `II_1.toml`) keeps the material going while the next line continues the marks (a name in capitals or a line in lower case, or no sentence end before it).
+- **A damaged copy marker**: `(ix)` for `(11)` in No. 12c is accepted as the expected number when the next marker follows. Copy (11) is now its own object.
+- **A print in a copy** (`print: …`, 6 copies in XIX (4)): everything after it, its own `lit.:` included, stays in a `print` part, so it is no longer read as the copy's literature.
+- **`Another version:`** (II (1) No. 15) is a copies label.
+- **Order in locations**: a year at the end (`R. Lauwers, Mechelen, 2016`) is split off into the note of the current stay; a person before a place holds it, and a person before a place and a holder (the weaver in II (1): `Frans van den Hecke, Turin, Palazzo Reale`) is left out of the location.
+- **A support after the location**, where the OCR wrote `,` for `;` (`Ghent, St. Peter’s Church, canvas, …`).
+
+Remaining:
+
+- descriptive text before a location (`A fictive copy depicted in …`, `Left half of a drawing, Brunswick, …`) and a region after the place (`Laurencekirk, Kincardineshire, Collection of …`);
+- the weaver of a tapestry copy is not recorded as an attribution;
+- in II (1), the footnotes of a page are not separated from the description, and note markers (`note_refs`) are not linked, in either volume.
 
 ### POC findings (part 2, local LLM)
 
@@ -1262,7 +1275,7 @@ The selection is split once, with a fixed seed and recorded in git, into a **dev
 
 The pre-filled files are JSON per entry (readable in an editor, diffable), or a spreadsheet per table if the annotators prefer that; the import accepts both.
 
-**Who.** Domain knowledge is needed to decide, for example, whether a stage is a collection stay or a sale, or what the transfer method is. The reference records are therefore made by or with the Rubenshuis, with the developer preparing, importing and checking them. A short **annotation guide** (in `doc/`) records the decisions, with examples, so that annotators decide in the same way and the LLM prompts can follow the same rules: what counts as a stage, how `his sale` and buyers are recorded, when a removal date is derived, how uncertainty is marked, which list value is used for borderline cases. Where the RO model, the RKD manual and the CRLB style guide differ, the guide states which one is followed in step 4 (in principle: the verbatim CRLB text for values, the RO lists for choices).
+**Who.** Domain knowledge is needed to decide, for example, whether a stage is a collection stay or a sale, or what the transfer method is. The reference records are therefore **made by the Rubenshuis and provided to the developer**, who imports and checks them (step 3 of the procedure above). The pre-filling (step 1) is offered to the Rubenshuis as a starting point, not required. A short **annotation guide** (in `doc/`) records the decisions, with examples, so that annotators decide in the same way and the LLM prompts can follow the same rules: what counts as a stage, how `his sale` and buyers are recorded, when a removal date is derived, how uncertainty is marked, which list value is used for borderline cases. Where the RO model, the RKD manual and the CRLB style guide differ, the guide states which one is followed in step 4 (in principle: the verbatim CRLB text for values, the RO lists for choices).
 
 **Agreement.** If two annotators are available, a few entries (for example 5) are done by both, to measure agreement and to sharpen the annotation guide. Disagreement between people is an upper bound for what extraction can be expected to reach.
 

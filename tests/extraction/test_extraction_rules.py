@@ -143,6 +143,35 @@ def test_location() -> None:
     assert (private.place, private.holder) == ("New York", "private collection")
 
 
+def test_location_with_a_person_first() -> None:
+    """A person before a place holds it; a person before a place and holder is the maker, not the location."""
+    owner = objects.parse_location("R. Lauwers, Mechelen, 2016")
+    assert (owner.holder, owner.place, owner.date_text) == (
+        "R. Lauwers",
+        "Mechelen",
+        "2016",
+    )
+    weaver = objects.parse_location("Frans van den Hecke, Turin, Palazzo Reale")
+    assert (weaver.place, weaver.holder) == ("Turin", "Palazzo Reale")
+    unsure = objects.parse_location("Probably Frans van den Hecke, Geneva, Musée d’Art")
+    assert (unsure.place, unsure.holder) == ("Geneva", "Musée d’Art")
+    # A place name with a particle and only a holder after it is not a person
+    place = objects.parse_location("Santiago de Compostela, Cathedral")
+    assert (place.place, place.holder) == ("Santiago de Compostela", "Cathedral")
+
+
+def test_copy_support_after_a_comma_is_not_the_holder() -> None:
+    """The OCR's ',' for ';' before the support does not put the support in the holder."""
+    copy = objects.parse_copy(
+        "(5) Painting, without the architedural frame, Ghent, St. Peter’s Church, canvas, 300 : 431 cm.;"
+    )
+    assert copy.location is not None
+    assert (copy.location.place, copy.location.holder) == (
+        "Ghent",
+        "St. Peter’s Church",
+    )
+
+
 def test_lost_location() -> None:
     """'Whereabouts unknown; presumably lost' is a location with a destruction cause, also with OCR damage."""
     location = objects.parse_location("Whereabouts unknown; presumably loSt.")

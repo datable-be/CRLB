@@ -31,3 +31,8 @@ pattern_damaged_with_link = '^(?P<number>\S{0,4}?)\s*\.?\s*(?=[A-Z][A-Z ]+:\s*[A
 [fields]
 # The fields are set in 7.5 pt, the description in 8.5 pt
 description_min_size = 8.2
+# The marks of a tapestry ("below, the mark of Brussels and IAN . RAES F.; to
+# the right, the marks of ...") run over several lines, which the OCR separates
+# by a gap and sets in italics: the material runs on until a sentence ends.
+# The OCR reads "mark" as "marie", "mad:" or "made".
+material_continues = '\bma\w{1,3}:? of Brussels\b'
