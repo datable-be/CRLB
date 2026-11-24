@@ -540,3 +540,46 @@ def test_group_introduction_ends_the_entry_before_it() -> None:
     assert found[0].last == lines[4].last
     # Without the setting there are no groups
     assert rules.groups(doc, section, entries, config()) == []
+
+
+def ocr_line(text: str, top: float, size: float, page: int = 0) -> Line:
+    """Return an OCR line at a height (fraction of the page), 0.01 high."""
+    words = [
+        Word(
+            100 * page + i,
+            t,
+            "Georgia",
+            size,
+            0,
+            50 + 30 * i,
+            top * HEIGHT,
+            75 + 30 * i,
+            (top + 0.01) * HEIGHT,
+        )
+        for i, t in enumerate(text.split(" "))
+    ]
+    return Line(page, HEIGHT, WIDTH, words, corrected=text)
+
+
+def test_ocr_description_starts_after_a_gap_not_at_a_larger_line() -> None:
+    """In an OCR volume the gap above a line decides, not its size; at a page break the size and a sentence end."""
+    fields_ocr = dataclasses.replace(BASE.fields, description_min_size=8.2)
+    literature = ocr_line("Literature: Elbern, p. 36; d'Hulst, 1968,", 0.40, 7.5)
+    larger = ocr_line(
+        "p. 99, under No. 18; Die Weltkunst, p. 450.", 0.415, 8.8
+    )  # gap 0.005
+    small_after_gap = ocr_line(
+        "A triumphal procession advances across a landscape.", 0.45, 7.5
+    )  # gap 0.025
+    assert not fields.is_description_start(larger, literature, fields_ocr)
+    assert fields.is_description_start(small_after_gap, larger, fields_ocr)
+    # a page number or a garbled label after a gap does not start it
+    assert not fields.is_description_start(
+        ocr_line("371", 0.45, 10.0), larger, fields_ocr
+    )
+    garbled = ocr_line("L i t b r a t u r e : Deseamps, Vie", 0.45, 7.5)
+    assert not fields.is_description_start(garbled, larger, fields_ocr)
+    # at a page break: a larger line after a sentence end
+    next_page = ocr_line("The modello differs from the bozzetto.", 0.12, 8.5, page=1)
+    assert fields.is_description_start(next_page, larger, fields_ocr)
+    assert not fields.is_description_start(next_page, literature, fields_ocr)

@@ -101,6 +101,13 @@ def groups(lines: list[Line]) -> list[list[Line]]:
     return result
 
 
+# The gap (fraction of the page height) above a description in an OCR volume;
+# the lines of a field are at most 0.010 apart
+DESCRIPTION_GAP = 0.015
+# A label the OCR spaced out and garbled, so that find_label misses it ('L i t b r a t u r e :')
+SPACED_LABEL = re.compile(r"^(?:\S\s){4,}\S*\s*:")
+
+
 def ends_sentence(line: Line) -> bool:
     """Return whether a line ends with a full stop (possibly before a closing bracket or quote)."""
     return line.text.rstrip(CLOSING + " ").endswith(".")
@@ -109,7 +116,14 @@ def ends_sentence(line: Line) -> bool:
 def is_description_start(line: Line, previous: Line, fields: Fields) -> bool:
     """Return whether a line starts the description of an entry."""
     if fields.description_min_size is not None:
-        return line.size >= fields.description_min_size
+        # The OCR's sizes are unreliable (a literature line at 12 pt, a whole page
+        # of description at 7.5 pt), so on the same page the gap above the line
+        # decides; at a page break, the size and the end of the line before
+        if not line.text[:1].isalpha() or SPACED_LABEL.match(line.text):
+            return False
+        if line.page_index == previous.page_index:
+            return line.top - previous.bottom >= DESCRIPTION_GAP
+        return line.size >= fields.description_min_size and ends_sentence(previous)
     if fields.description_new_block:
         return (
             line.block_no != previous.block_no

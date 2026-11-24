@@ -1,12 +1,19 @@
 # II (1), ABBYY FineReader 11 OCR with RKD links.
 part = "II (1)"
 
-# No running heads; the page number is at the bottom in bold 14 pt (AngsanaUPC).
+# No running heads; the page number is at the bottom in bold 14 pt (AngsanaUPC)
 [[furniture]]
 label = "page_number"
 top = 0.86
 bottom = 1.0
 min_size = 11.0
+
+# ... but the OCR reads some page numbers at 7.5-10.5 pt. The text ends above
+# 0.875, so below that line any size is furniture.
+[[furniture]]
+label = "page_number"
+top = 0.875
+bottom = 1.0
 
 [sections]
 # Top-level bookmarks; the catalogue starts at "CATALOGUE RAISONNE"
