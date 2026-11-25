@@ -15,11 +15,13 @@ import base64
 import html
 import json
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from crlb import db
+from crlb.extraction.provenance import MERGED_NOTE
 from crlb.extraction.references import object_nodes
 from crlb.extraction.source import Entry, Node, load_entries, segmentation_run
 from crlb.sample import add_sample_option
@@ -104,6 +106,17 @@ def line_boxes(
             box.x0, box.y0 = min(box.x0, x0), min(box.y0, y0)
             box.x1, box.y1 = max(box.x1, x1), max(box.y1, y1)
     return list(lines.values())
+
+
+def row_methods(
+    rows: Sequence[sqlite3.Row | Mapping[str, Any]], items: list[Node]
+) -> dict[tuple[int, int], str]:
+    """Return the method of each provenance row by its word range; a last stage merged into the current location counts as that row's."""
+    methods = {(r["first_word_id"], r["last_word_id"]): r["method"] for r in rows}
+    merged = [r for r in rows if r["note"] == MERGED_NOTE]
+    if items and merged:
+        methods[(items[-1].first, items[-1].last)] = merged[0]["method"]
+    return methods
 
 
 def covered(item: Node, ranges: list[tuple[int, int]]) -> bool:
@@ -343,16 +356,14 @@ class Page:
                     ],
                 )
             )
-        ranges = [(r["first_word_id"], r["last_word_id"]) for _, r in chain]
         items = [
             item
             for field in owner.fields("provenance")
             for item in field.children
             if item.kind == "item"
         ]
-        methods = {
-            (r["first_word_id"], r["last_word_id"]): r["method"] for _, r in chain
-        }
+        methods = row_methods([r for _, r in chain], items)
+        ranges = list(methods)
         for item in items:
             method = next(
                 (

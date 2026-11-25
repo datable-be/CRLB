@@ -103,6 +103,10 @@ class Stage:
         return dates.parse_date(self.date_text) if self.date_text else None
 
 
+# The note of a current location into which the last provenance stage is merged
+MERGED_NOTE = "the last provenance stage is merged into the current location"
+
+
 def clean(text: str) -> str:
     """Return a stage without its final punctuation and note number."""
     return NOTE_MARKER.sub("", text.strip()).strip().rstrip(";,.").strip()
@@ -329,9 +333,7 @@ def insert_row(
             row.node,
             run_id,
             object_id=object_id,
-            note="the last provenance stage is merged into the current location"
-            if stage
-            else None,
+            note=MERGED_NOTE if stage else None,
             method=row.method,
             position=row.position,
             holder_text=location.holder,

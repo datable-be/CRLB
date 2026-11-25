@@ -1,6 +1,7 @@
 """Tests for the helpers of the extraction review page."""
 
 from crlb.extraction import review
+from crlb.extraction.provenance import MERGED_NOTE
 from crlb.extraction.source import Node
 
 
@@ -36,3 +37,19 @@ def test_date_range_and_mapped_values() -> None:
     assert review.mapped("Oil & panel", "paneel") == (
         'Oil &amp; panel <span class="mapped">→ paneel</span>'
     )
+
+
+def test_a_last_stage_merged_into_the_current_location_is_covered() -> None:
+    """The stage 'by whom bequeathed to the museum' is part of the current location's row, not a stage without a row."""
+    stage = Node(1, "item", None, 50, 55, None, "by whom bequeathed to the museum.")
+    location = {
+        "first_word_id": 10,
+        "last_word_id": 20,
+        "method": "rules",
+        "note": MERGED_NOTE,
+    }
+    methods = review.row_methods([location], [stage])
+    assert methods[(50, 55)] == "rules"
+    assert review.covered(stage, list(methods))
+    unmerged = {**location, "note": None}
+    assert not review.covered(stage, list(review.row_methods([unmerged], [stage])))
