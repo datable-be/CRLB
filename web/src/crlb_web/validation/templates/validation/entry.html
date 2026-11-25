@@ -14,7 +14,7 @@
 <table><tr>{% for h in t.headers %}<th>{{ h }}</th>{% endfor %}<th class="actions">Review</th></tr>
 {% for row in t.rows %}
 <tr id="{{ row.anchor }}" data-key="{{ row.key }}">
-{% for cell in row.cells %}<td>{% for v in cell %}{% include "validation/value.html" %}{% if not forloop.last %}; {% endif %}{% endfor %}</td>{% endfor %}
+{% for cell in row.cells %}<td>{% for v in cell %}{% include "validation/value.html" %}{% if not forloop.last %} {% endif %}{% endfor %}</td>{% endfor %}
 <td class="actions">{% if row.table %}<span class="status {{ row.status }}">{{ row.status }}</span>
 {% if row.section in can_review %}
 <form method="post" action="{% url 'review' %}" class="inline">{% csrf_token %}{% include "validation/target.html" %}<button name="action" value="accept" title="Accept">✓</button><button name="action" value="reject" title="Reject">✗</button></form>

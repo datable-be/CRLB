@@ -79,6 +79,7 @@ class Value:
     original: str | None = None
     mapped: str | None = None
     label: str | None = None
+    css: str | None = None  # e.g. 'badge llm'
 
 
 @dataclass
@@ -353,9 +354,12 @@ class Builder:
                         ("removed", "collection_removal_date"),
                     ]
                 ]
+                parsed = r.value("collection_entry_date")
                 date = [
-                    r.value(
-                        "collection_entry_date", label=r["collection_entry_date_text"]
+                    Value(
+                        r["collection_entry_date_text"] or "",
+                        parsed.original,
+                        parsed.text or None,
                     )
                 ]
             else:
@@ -389,7 +393,7 @@ class Builder:
                 r,
                 [
                     [Value(str(r["position"]))],
-                    [Value(method, label="method")],
+                    [Value(method, css=f"badge {method}")],
                     [Value(kind)],
                     what,
                     date,
