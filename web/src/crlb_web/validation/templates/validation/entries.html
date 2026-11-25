@@ -1,0 +1,8 @@
+{% extends "validation/base.html" %}
+{% block content %}<main class="narrow"><h1>Entries</h1>
+<p class="muted">The entries of the active step 4 runs; the counts are rows of the records per review status.</p>
+<table><tr><th>Part</th><th>No.</th><th>Title</th><th>Rows</th><th>Unreviewed</th><th>Accepted</th><th>Corrected</th><th>Rejected</th></tr>
+{% for e in entries %}<tr><td>{{ e.part }}</td><td><a href="{% url 'entry' e.part e.number %}">{{ e.number }}</a></td><td>{{ e.title|default:"" }}</td>
+<td>{{ e.total }}</td><td>{{ e.counts.unreviewed|default:0 }}</td><td>{{ e.counts.accepted|default:0 }}</td><td>{{ e.counts.corrected|default:0 }}</td><td>{{ e.counts.rejected|default:0 }}</td></tr>
+{% empty %}<tr><td colspan="8">No entries in the active runs.</td></tr>{% endfor %}
+</table></main>{% endblock %}

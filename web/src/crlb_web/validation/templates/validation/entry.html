@@ -1,0 +1,37 @@
+{% extends "validation/base.html" %}
+{% block title %}CRLB {{ part }}, No. {{ number }} · validation{% endblock %}
+{% block content %}
+<header><h1>CRLB {{ part }}, No. {{ number }}</h1>
+<p>Active step 4 runs: objects {{ runs.objects }}, references {{ runs.references }}, provenance {{ runs.provenance }}{% if normalisation_run %}; normalisation run {{ normalisation_run }}{% endif %}.</p>
+<p class="legend">Provenance stages in the PDF:<span class="swatch" style="background:rgb(var(--rules))"></span>by rules<span class="swatch" style="background:rgb(var(--llm))"></span>by the LLM<span class="swatch" style="background:rgb(var(--none))"></span>no row
+— point at a row to see its source in the PDF; click it to scroll there. <span class="corrected">Underlined</span> values are corrected (the extracted value is in the tooltip).</p>
+</header>
+<div class="view"><div class="pdf">
+{% for p in pages %}<div class="page"><img alt="PDF page {{ p.index|add:1 }}" loading="lazy" src="{% url 'page' p.document_id p.index %}">{% for b in p.boxes %}<div class="box {{ b.classes }}" style="{{ b.style }}"></div>{% endfor %}</div>{% endfor %}
+</div><div class="records">
+{% for obj in objects %}<section class="object"><h2>No. {{ obj.number }}</h2>
+{% for t in obj.tables %}<h3>{{ t.title }} ({{ t.rows|length }})</h3>
+<table><tr>{% for h in t.headers %}<th>{{ h }}</th>{% endfor %}<th class="actions">Review</th></tr>
+{% for row in t.rows %}
+<tr id="{{ row.anchor }}" data-key="{{ row.key }}">
+{% for cell in row.cells %}<td>{% for v in cell %}{% include "validation/value.html" %}{% if not forloop.last %}; {% endif %}{% endfor %}</td>{% endfor %}
+<td class="actions">{% if row.table %}<span class="status {{ row.status }}">{{ row.status }}</span>
+{% if row.section in can_review %}
+<form method="post" action="{% url 'review' %}" class="inline">{% csrf_token %}{% include "validation/target.html" %}<button name="action" value="accept" title="Accept">✓</button><button name="action" value="reject" title="Reject">✗</button></form>
+{% endif %}<button type="button" class="toggle" data-panel="panel-{{ row.anchor }}" title="Correct, remark, history">⋯{% if row.history %} {{ row.history|length }}{% endif %}</button>{% endif %}</td>
+</tr>
+{% if row.table %}<tr class="panel" id="panel-{{ row.anchor }}" hidden><td colspan="{{ t.headers|length|add:1 }}">
+{% if row.candidates %}<div class="candidates"><b>Candidates</b>
+<ul>{% for c in row.candidates %}<li>{{ c.label }} <span class="muted">{{ c.vocabulary }} · score {{ c.score|floatformat:2 }}{% if c.evidence %} · {{ c.evidence|join:"; " }}{% endif %}</span>
+{% if row.section in can_review %}<form method="post" action="{% url 'review' %}" class="inline">{% csrf_token %}{% include "validation/target.html" %}<input type="hidden" name="action" value="correct"><input type="hidden" name="column" value="normalised_value"><input type="hidden" name="value" value="{{ c.label }}"><input type="hidden" name="comment" value="candidate: {{ c.vocabulary }} term {{ c.term_id }}"><button>choose</button></form>{% endif %}</li>{% endfor %}</ul></div>{% endif %}
+{% if row.section in can_review %}<form method="post" action="{% url 'review' %}" class="correct">{% csrf_token %}{% include "validation/target.html" %}<input type="hidden" name="action" value="correct">
+<label>Correct <select name="column">{% for f in row.fields %}<option value="{{ f.column }}" data-value="{{ f.value }}">{{ f.column }}{% if f.corrected %} (corrected){% endif %}</option>{% endfor %}</select></label>
+<input name="value" value="{{ row.fields.0.value }}" size="30"> <input name="comment" placeholder="why (optional)" size="20"> <button>save</button></form>{% endif %}
+{% if can_remark %}<form method="post" action="{% url 'review' %}" class="remark">{% csrf_token %}{% include "validation/target.html" %}<input type="hidden" name="action" value="comment">
+<input name="comment" placeholder="remark" size="50" required> <button>add remark</button></form>{% endif %}
+{% if row.history %}<ol class="history">{% for h in row.history %}<li><span class="muted">{{ h.reviewed_at }} · {{ h.reviewer }}</span> {{ h.action }}{% if h.column_name %} {{ h.column_name }}{% endif %}{% if h.action == "correct" %}: “{{ h.old_value|default:"" }}” → “{{ h.new_value }}”{% endif %}{% if h.comment %} — {{ h.comment }}{% endif %}</li>{% endfor %}</ol>{% endif %}
+</td></tr>{% endif %}
+{% endfor %}</table>
+{% endfor %}</section>{% endfor %}
+</div></div>
+{% endblock %}

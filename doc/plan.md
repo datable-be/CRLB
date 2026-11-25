@@ -35,6 +35,7 @@ src/crlb/
 ├── extraction/         step 4 (with prompts/ and vocabularies/)
 └── enrichment/         step 5 (with entry_rules/)
 tests/                  one folder per subpackage, as now
+web/                    the validation interface (Django), a separate package; see "Validation interface"
 ```
 
 - **CLI:** `crlb <command>`, declared in `pyproject.toml` under `[project.scripts]`. Examples: `crlb list-pdfs`, `crlb build`, `crlb lexicon`, `crlb correct run`, `crlb segment`, `crlb extract provenance`, `crlb extract markdown`, `crlb normalise`, `crlb set-active <step> <run>`, `crlb ocr sample`. `crlb --help` lists them all. Only the standard library (`argparse`) is used for the CLI.
@@ -115,6 +116,7 @@ Before the whole corpus, every step is run on two catalogue entries: one from XI
     - **5a, control lists** (`make lists_poc`): the collections and names-and-places indexes of both parts as `control_terms` with their page references, and the RKDimages records of the 22 POC objects with the RKD terms they use, from the public RKD Knowledge Graph (SPARQL; only RKD IDs are sent).
     - **5b, normalisation** (`make normalise_poc`, then `make review_normalise_poc` for the review file `data/poc/review/normalisation.csv`): holders, places, auction houses, consignors, buyers and sales of the two entries, matched to the RKD and index terms, clustered, and formatted by the RKD entry instructions where no term fits.
     - **Deferred:** the literature and exhibition abbreviations (there is no RKD citation list yet), 5c (LOD URIs), 5d (named entities), 5e (the comparison with the RKD records, which are fetched and ready for it) and 5f.
+6. **Validation interface** (see "Validation interface"): the review page of part 3 as a Django web application for Rubenshuis colleagues, on a copy of `crlb.sqlite` (`make web_db`, `make web_user`, `make web`). Users log in and, by role, view the entry pages, add remarks, or accept, reject and correct the step 4 rows and the normalised values of 5b, also by choosing one of the candidates. Every decision is a row in `reviews`.
 
 **Open in the POC** (state of 25 November 2026; details in the sections referred to):
 
@@ -439,7 +441,7 @@ Run locally (`make build_database`); the output is counts only.
 - Extracting structured data from the fields.
 - NER.
 - Re-OCR of the scans.
-- The validation interface.
+- The validation interface (see "Validation interface").
 
 ## Step 2: OCR correction
 
@@ -1869,6 +1871,38 @@ Rules:
 - Exports and later steps use the **effective value**: the `new_value` of the latest `correct` review of that column, or otherwise the value in the row.
 - A rerun of a step produces new rows in a new run. Reviews of the old run are carried over to the new run where the row is unchanged (same word range, same values); the others are listed for review again.
 - Review decisions are the most expensive data in the project. `crlb.sqlite` is backed up before every run and every import, and `reviews` can be exported to a file on its own.
+- Every review also stores the word range of its row (`first_word_id`, `last_word_id`; for a normalised value, the range of the step 4 row it normalises). Row ids change with a rerun, word ranges do not: the range is what carry-over uses, and what keeps the reviews usable if they are moved to a database of their own.
+- The table is in `schema/06_review.sql`; `crlb.review` holds `record` (the decision and the status in one transaction), `corrections`, `effective`, `history`, and `EDITABLE`, the columns a reviewer can correct per table: the values, never ids, word ranges or runs. The validation interface and a later export both use this module.
+
+## Validation interface
+
+The review pages of step 4 (part 3) as a web application, so that Rubenshuis colleagues can check, correct and comment on the data. It is built with Django: authentication, groups and permissions give the roles, the admin manages users and shows the review log, and the application imports `crlb` to reuse its loaders, the page rendering and `crlb.review`.
+
+**Architecture.** A separate package in the same repository: the uv workspace member `web/` (`crlb-web`, Django project `crlb_web`, app `validation`). `crlb` has no Django dependency; `crlb-web` depends on `crlb` and Django. The command is `crlb-web` (Django's `manage.py`).
+
+**One database.** Review is done on a finalised `crlb.sqlite`: the application works on a copy, `data/poc/crlb_review.sqlite` (`make web_db`, which refuses to overwrite an existing copy, since it holds the reviews). Django adds its own tables (`auth_*`, `django_*`) to that file; `reviews` is a `crlb` table (`06_review.sql`), which the Django model `Review` maps without managing it. `crlb` runs never write to the review copy while review is open. The reviews can be split off into a database of their own later, if review and pipeline runs must overlap: they are anchored to word ranges.
+
+**SQLite is enough** for a few reviewers: one decision is one short transaction. The connection uses WAL (readers never wait for a writer), `busy_timeout` and Django's `transaction_mode = "IMMEDIATE"` (concurrent writers queue instead of failing). PostgreSQL would only be needed for many concurrent writers or several application servers; the Django code is database-neutral.
+
+**Roles** (`crlb-web setup_roles`, run by `make web_db`):
+
+- **Viewer:** reads the pages.
+- **Commenter:** Viewer, and adds remarks.
+- **Reviewer:** Commenter, and accepts, rejects and corrects in the sections it has the permission for: `review_objects`, `review_references`, `review_provenance` and `review_normalisation`. The Reviewer group has all four; narrower groups (provenance only, for example) are made in the admin.
+- **Staff users** manage users and groups in the admin, where the review log is read-only, with filters on reviewer, table and action.
+
+Every POST checks the permission and the column against `EDITABLE` on the server; the page only hides the buttons a user cannot use.
+
+**Pages** (all behind login):
+
+- **Entries** (`/`): the entries of the active step 4 runs, with the number of rows per status.
+- **Entry page** (`/entry/<part>/<number>/`): the review page of part 3. On the left, the PDF pages, rendered once from `pdfs.sqlite` and cached in `data/web/pages/`, with the provenance stages coloured by method and the source of a row highlighted when pointing at it. On the right, the objects with their tables, now with the normalised values of 5b. Each row has its status, accept and reject buttons, and a panel to correct a column (starting from its effective value), add a remark, choose a normalisation candidate, and see the history. A corrected value is shown underlined, with the extracted value in its tooltip.
+
+**Running it.** Locally: `make web_db`, `make web_user` (a superuser) and `make web` (`runserver` on 127.0.0.1:8000). Settings come from environment variables (`CRLB_DB`, `CRLB_PDFS`, `CRLB_WEB_DIR`, `CRLB_WEB_SECRET_KEY`, `CRLB_WEB_DEBUG`, `CRLB_WEB_HOSTS`); without `CRLB_WEB_SECRET_KEY` a key is made in `data/web/secret_key`.
+
+**Later, on a server** (a Linode VPS): gunicorn under systemd behind nginx with a certbot certificate, `CRLB_WEB_DEBUG=0`, the database files outside the web root, `collectstatic`, and a nightly `sqlite3 .backup` of the review database. The CRLB text then leaves the local machine, which needs the Rubenshuis's agreement first.
+
+**Not yet:** carry-over of reviews to a rerun; an export with the effective values; review of the segments (step 3) and of the clusters of 5b; the stages without a row and the rejected LLM answers can be seen but not reviewed.
 
 ## Volumes without a PDF
 

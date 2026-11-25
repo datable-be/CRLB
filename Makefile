@@ -125,5 +125,26 @@ review_normalise_poc:
 	$(call header,Step 5b: review file of the latest normalisation run)
 	$(call run,uv run --locked crlb normalise review data/poc/crlb.sqlite)
 
+# The validation interface works on a copy of crlb.sqlite; reviews are stored
+# there, so an existing copy is never overwritten
+WEB_DB = data/poc/crlb_review.sqlite
+
+# web/ is also a directory, so these targets must always run
+.PHONY: web web_db web_user
+
+web_db:
+	$(call header,Validation interface: review copy of crlb.sqlite)
+	@if [ -e $(WEB_DB) ]; then echo "$(WEB_DB) exists and may hold reviews; remove it by hand first"; exit 1; fi
+	$(call run,sqlite3 data/poc/crlb.sqlite ".backup $(WEB_DB)")
+	$(call run,uv run --locked python -c "from pathlib import Path; from crlb import db; print(db.apply_schema(db.connect(Path('$(WEB_DB)'))))")
+	$(call run,CRLB_DB=$(WEB_DB) uv run --locked crlb-web migrate)
+	$(call run,CRLB_DB=$(WEB_DB) uv run --locked crlb-web setup_roles)
+
+web_user:
+	$(call run,CRLB_DB=$(WEB_DB) uv run --locked crlb-web createsuperuser)
+
+web:
+	$(call run,CRLB_DB=$(WEB_DB) uv run --locked crlb-web runserver 127.0.0.1:8000)
+
 help:
-	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, substitute_poc, measure_poc, show_poc, poc, accept_poc, segment_poc, entries_poc, show_segment_poc, accept_segment_poc, extract_poc, accept_extract_poc, serve_qwen, serve_ministral, extract_llm_poc, review_extract_poc, markdown_poc, lists_poc, normalise_poc, review_normalise_poc"
+	@echo "sample_specimens, analyse_specimens, build_poc, lexicon_poc, correct_poc, substitute_poc, measure_poc, show_poc, poc, accept_poc, segment_poc, entries_poc, show_segment_poc, accept_segment_poc, extract_poc, accept_extract_poc, serve_qwen, serve_ministral, extract_llm_poc, review_extract_poc, markdown_poc, lists_poc, normalise_poc, review_normalise_poc, web_db, web_user, web"

@@ -16,16 +16,25 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "crlb-web",
     "pytest>=9.1.1",
+    "pytest-django>=4.14.0",
     "ruff>=0.17.0",
     "ty>=0.0.86",
 ]
 
+[tool.uv.workspace]
+members = ["web"]
+
+[tool.uv.sources]
+crlb-web = { workspace = true }
+
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "web/tests"]
+DJANGO_SETTINGS_MODULE = "crlb_web.settings"
 
 [tool.ruff]
-extend-exclude = ["scripts/archive"]
+extend-exclude = ["scripts/archive", "web/src/crlb_web/validation/migrations"]
 
 [tool.ty.src]
 exclude = ["scripts/archive"]
