@@ -116,6 +116,15 @@ Before the whole corpus, every step is run on two catalogue entries: one from XI
     - **5b, normalisation** (`make normalise_poc`, then `make review_normalise_poc` for the review file `data/poc/review/normalisation.csv`): holders, places, auction houses, consignors, buyers and sales of the two entries, matched to the RKD and index terms, clustered, and formatted by the RKD entry instructions where no term fits.
     - **Deferred:** the literature and exhibition abbreviations (there is no RKD citation list yet), 5c (LOD URIs), 5d (named entities), 5e (the comparison with the RKD records, which are fetched and ready for it) and 5f.
 
+**Open in the POC** (state of 25 November 2026; details in the sections referred to):
+
+- **Reference records:** provided by the Rubenshuis; their import, and the measurement against them, wait for them (step 4, "Reference records").
+- **Step 3:** `l-5a` in II (1) is read as 1a, although cross-references suggest a numbering such as `1-5a`; XIX (4) No. 54 is a group heading without fields; the subject indexes and "other works" indexes are not itemised (rule 10 covers collections and names and places).
+- **Step 4, rules** ("POC findings (part 1, rules)", Remaining): a former location stored as the current one; a person without initials, title or particle before a place taken as the place; a name split by the OCR.
+- **Step 4, the 6 stages of 12c without a row** after the Qwen run ("POC findings (part 2)", rerun): four could get a row by rules: a bequest whose giver is the holder of the previous stage (`bequeathed by him to the Museum`), the usufruct by a widow, and the stray `and`, a split of `prov. and lit.`, which should stay with its neighbour; the other two (a possible identification, a work presented to Sotheby's) are no stay or sale.
+- **Step 4, the display Markdown** (the faithful version is done).
+- **Step 5** ("POC findings (5a and 5b)", Not yet): 5c (LOD URIs, TGN for places first), 5d, 5e, 5f; the literature and exhibition abbreviations; the request list of missing RKD terms; the index terms are not rebuilt after a new segmentation run while a normalisation run uses them; the index spelling of an OCR volume can carry an OCR error; some names are not matched to their RKD term.
+
 ## Step 1: text database
 
 ### Goal
@@ -878,7 +887,7 @@ Subpackage `crlb.segmentation`, schema `03_segmentation.sql`:
 - The `(7)` in a different font (BellMT 10 pt) at the position of an RKD link in XIX (4). **Checked:** text set by the link tool (copy numbers such as `(7)`, and in II also `* Painting`). It is real text, without a duplicate on the page, but stored at the end of the page, out of reading order, so it is marked as furniture (`moved_by_link_tool`); the checks count the RKD links on it separately.
 - Whether ABBYY's font sizes are consistent enough across a whole volume for the style rules. **Checked for II (1):** not for headings (see above); the sizes of fields (7.5 pt), description (8.5 pt) and notes are consistent and are used.
 
-Known gaps in the POC segmentation: entry II 14b is not found (damaged number and a title in lowercase); `l-5a` is read as 1a, although cross-references suggest a numbering such as `1-5a`; in II (1) many note numbers are damaged by the OCR, so few notes are found; XIX (4) No. 54 is a group heading without fields.
+Known gaps in the POC segmentation: `l-5a` is read as 1a, although cross-references suggest a numbering such as `1-5a`; XIX (4) No. 54 is a group heading without fields. Fixed since: entry II 14b (a heading stored out of reading order, see above), the notes of II (1) (88 notes in 41 entries, damaged first numbers allowed) and the description starts in OCR volumes.
 
 ## Step 4: extraction
 
@@ -1222,6 +1231,8 @@ Results on the 57 calls for the two POC entries: 18 stages that rules leave, and
 - **On the stages that rules leave,** the model rows are mostly right: `acquired by Balthasar Moretus between …`, `purchased … by Charles II, King of Spain`. There are real errors too: `the apartments of the court painters` taken as a holder, and the dealers `Asscher, Koetser and Welker` read as a sale. A stage with two holders (`Cobentzl, from whom it was purchased by Catherine II`) gives one row, with the purchase given to the wrong holder. This is a limit of one stage giving one row.
 - **The two models agree** on 89–100% of the parts of the 45 stages that both answered validly. They disagree most on collection type (7), holder, consignor and transfer method.
 - **Speed:** generation runs at about 4 tokens per second, half the estimate. The prompt prefix is read once (about 75 s) and then cached, so the time per call is almost all the answer of about 90 tokens. At about 24 s per stage, the 348 stages that rules leave in XIX (4) and II (1) would take about 2.3 hours. A whole corpus of tens of thousands of stages is out of reach on this machine, as the plan expected.
+
+**Rerun on the current text** (provenance run 37, 24 November 2026, after the fixes of steps 2b, 3 and 4): Qwen3.5 4B on the 19 stages that rules leave, without `--compare-rules` (7.5 minutes, 24 s per call). 13 stages get a row (12 collection stays, one sale), 3 answers are `other`, and 3 are rejected, each because the model took a value from the previous stage or wrote a date that is not in the text (`Casa de Campo`, `Emile Tournay-Solvay`, `after his death, in 1958, until 1973`). The rules rows are unchanged. Of the 6 stages without a row, all in 12c, four could get one by rules: `bequeathed by him to the Museum` (the giver is the holder of the previous stage, as for `his sale`), `held in usufruct by his widow, until 1973` (a stay), and a stray `and` (a split of `prov. and lit.`) that belongs with its neighbour. The other two are no stay or sale: a possible identification with a work in the Carpio collection, and a panel presented to Sotheby's that Burchard thought identical.
 
 **Recommendation:** Qwen3.5 4B for the local runs. It is faster, has fewer rejected answers, and is as close to the rules as Ministral. Before a full run, an annotator should review the model rows, through the review page of part 3, and set the threshold.
 
@@ -1572,7 +1583,14 @@ CREATE INDEX normalised_values_row ON normalised_values(table_name, row_id);
 - **Matching** (`crlb/enrichment/matching.py`): the name similarity (rapidfuzz, on forms without case, accents, punctuation, life dates and leading article, also as `Last, First`) plus evidence: the index refers to the value's printed page (+0.1), the RKD record of the same work uses the term (+0.1), the collections index lists the object (its copy, or an `after Rubens` work) under the collection (+0.15, for the current location), the RKD auction's dates contain the sale's date (with +0.15 for the same place). A term is assigned from 0.95 with a margin of 0.1 to the next; from 0.8 without a decision the value goes to review. Candidates below 0.7 similarity are dropped.
 - **Normalised value:** the RKD term when one is assigned, else the index spelling of a person (`Verdussen, Cornelia`), else the entry instructions. Values sharing a term, directly or through another value, are one cluster, and a cluster with an RKD term gives its name to all its values (the buyer `Gasser` gets `Gasser, Hanns` through `Hans Gasser`).
 - **Results** on the two entries (113 values): of 51 holders, 21 get an RKD term, 24 an index term, 1 its RKD term through its cluster, 1 a formatted name, and 4 go to review (`Plantin-Moretus collection`, `French royal collection`, `A. Delahante` against `Delahante, Alexis`, `John Clerk, Lord Eldin` with two index entries). All 12 named current locations are confirmed by the collections index. 3 of the 14 sales match an RKD auction; the Fonson sale of 5 September 1821 is in both No. 4 (Oudenaarde) and its copy 3 (Ghent), and the second goes to review because the place differs. The RKD names correct OCR (`Mile Bowen` → `Bowen, Mlle`) and complete abbreviations (`Prado` → `Museo Nacional del Prado`). 89 clusters, 14 with more than one value.
-- **Not yet:** places are only checked against the index (no RKD geographic terms or TGN yet, 5c); the request list of missing RKD terms; merging the same sale across entries beyond the RKD auction file.
+- **With the Qwen stages** (normalisation run 4): 135 values; the 113 of the rules stages are unchanged, and the 22 new ones are matched in the same way (`Balthasar Moretus` → `Moretus, Balthasar`, `Dr Fritz Rothmann` → `Rothmann, Fritz (dr.)`, `the Prado` → `Museo Nacional del Prado`).
+- **Not yet:**
+    - places are only checked against the index (no RKD geographic terms or TGN yet, 5c);
+    - the request list of missing RKD terms;
+    - merging the same sale across entries beyond the RKD auction file;
+    - the index spelling of an OCR volume can carry an OCR error, which then becomes the normalised value (`Mellaert` → `Mellaett`); in OCR volumes the index form should only be used when it agrees with the text or with RKD;
+    - some names miss their RKD term because the name similarity is too low: `Count Karl Cobentzl` against RKD's `Cobenzl, Karl Johann Philipp von`, `F. Rothmann` against `Rothmann, Fritz (dr.)`; initials and extra first names need their own comparison;
+    - `crlb lists indexes` does not replace index terms that a normalisation run uses, so after a new segmentation run they stay those of the earlier run (segmentation run 24): the collections index's references to II 14b, found since, are not yet linked to the entry. Index terms need a version per segmentation run, or a rebuild that keeps the old terms of earlier normalisation runs.
 
 ### 5c: enrichment with LOD URIs
 
